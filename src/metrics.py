@@ -4,22 +4,43 @@ from __future__ import annotations
 
 import pandas as pd
 
-from src.data import SCENARIO_LABELS, HospitalData
+from src.data import SCENARIO_LABELS, HospitalData, SimulationConfig
 from src.simulation import ScenarioResult, run_all_scenarios
 
 
-def build_comparison_table(results: dict[str, ScenarioResult]) -> pd.DataFrame:
+def _fmt_eur(value: float) -> str:
+    return f"{value:,.0f}".replace(",", " ")
+
+
+def scenario_investment(result: ScenarioResult, config: SimulationConfig) -> float:
+    if result.scenario != "new_hdj":
+        return 0.0
+    slots = result.new_hdj_slots or int(result.summary.get("proposed_hdj_daily_slots", 12))
+    return slots * config.hdj_setup_cost_per_slot
+
+
+def build_comparison_table(
+    results: dict[str, ScenarioResult],
+    config: SimulationConfig,
+) -> pd.DataFrame:
     """Aggregate scenario summaries into a comparison table."""
+    baseline_rev = results["status_quo"].summary["total_revenue_eur"]
     rows = []
     for scenario, result in results.items():
         s = result.summary
+        investment = scenario_investment(result, config)
+        revenue = s["total_revenue_eur"]
+        revenue_delta = revenue - baseline_rev
         rows.append(
             {
                 "scenario": scenario,
                 "scenario_label": SCENARIO_LABELS.get(scenario, scenario),
                 "avg_wait_days": round(s["avg_wait_days"], 1),
                 "hdj_conversion_rate": round(s["hdj_conversion_rate"] * 100, 1),
-                "total_revenue_eur": round(s["total_revenue_eur"], 0),
+                "total_revenue_eur": round(revenue, 0),
+                "revenue_delta_eur": round(revenue_delta, 0),
+                "investment_eur": round(investment, 0),
+                "net_gain_eur": round(revenue_delta - investment, 0),
                 "fragmented_pathways": s["fragmented_pathways"],
                 "existing_hdj_pathways": s["existing_hdj_pathways"],
                 "new_hdj_pathways": s.get("new_hdj_pathways", 0),
@@ -92,47 +113,84 @@ def compute_baseline_delta(
     return pd.DataFrame(rows)
 
 
-def recommend_scenario(results: dict[str, ScenarioResult]) -> dict:
+def recommend_scenario(
+    results: dict[str, ScenarioResult],
+    data: HospitalData,
+) -> dict:
     """
     Score scenarios and return a governance-friendly recommendation.
-    Weights: wait reduction, revenue, conversion, saturation penalty.
+    Uses net financial gain (revenus − investissement structurel) so that
+    « statu quo » or « optimiser l'existant » win when a new HDJ is not worth it.
     """
     baseline = results["status_quo"].summary
+    config = data.config
+    focus = config.focus_specialty
     scores: dict[str, float] = {}
+    net_gains: dict[str, float] = {}
 
     for scenario, result in results.items():
         s = result.summary
         wait_gain = baseline["avg_wait_days"] - s["avg_wait_days"]
         revenue_gain = s["total_revenue_eur"] - baseline["total_revenue_eur"]
+        investment = scenario_investment(result, config)
+        net_revenue_gain = revenue_gain - investment
+        net_gains[scenario] = net_revenue_gain
         conversion_gain = s["hdj_conversion_rate"] - baseline["hdj_conversion_rate"]
         saturation_penalty = max(0, s["max_resource_saturation"] - 0.85) * 50
 
         score = (
             wait_gain * 2.0
-            + revenue_gain / 5000
+            + net_revenue_gain / 5000
             + conversion_gain * 40
             - saturation_penalty
         )
         scores[scenario] = score
 
     best = max(scores, key=scores.get)
+    optimize = results["optimize_existing"]
+    optimize_net = net_gains["optimize_existing"]
+    new_net = net_gains["new_hdj"]
+    marginal_new_vs_opt = new_net - optimize_net
+
+    # Prefer existing HDJ optimisation when a new unit adds little net value.
+    if best == "new_hdj" and marginal_new_vs_opt < 0:
+        best = "optimize_existing"
+
     best_result = results[best]
+    specialty_label = focus or best_result.summary.get("proposed_hdj_specialty", "N/A")
 
     reasons = []
     if best == "status_quo":
         reasons.append(
-            "Les gains organisationnels ne compensent pas le risque de saturation "
-            "ou le coût de reconfiguration."
+            "Aucune reconfiguration n'améliore le gain net : les coûts ou la saturation "
+            "l'emportent sur les bénéfices attendus."
+        )
+        reasons.append(
+            f"Le statu quo évite un investissement structurel "
+            f"(gain net des autres scénarios ≤ 0 €)."
         )
     elif best == "optimize_existing":
         reasons.append(
-            "L'optimisation des HDJ existants réduit les délais et améliore la "
-            "valorisation sans investissement structurel majeur."
+            f"Gain net estimé : {_fmt_eur(optimize_net)} € vs statu quo "
+            f"(revenus supplémentaires, sans ouvrir de nouvelle unité)."
         )
-    else:
-        specialty = best_result.summary.get("proposed_hdj_specialty", "N/A")
         reasons.append(
-            f"La spécialité '{specialty}' présente un volume fragmenté suffisant "
+            "L'optimisation des HDJ existants réduit les délais et améliore la "
+            "valorisation sans investissement lourd."
+        )
+        if marginal_new_vs_opt < 0:
+            reasons.append(
+                f"Créer un nouveau HDJ n'apporte que {_fmt_eur(marginal_new_vs_opt)} € net "
+                f"vs optimiser l'existant — insuffisant pour justifier l'ouverture."
+            )
+    else:
+        invest = scenario_investment(best_result, config)
+        reasons.append(
+            f"Gain net estimé : {_fmt_eur(new_net)} € vs statu quo "
+            f"(dont −{_fmt_eur(invest)} € d'investissement structurel)."
+        )
+        reasons.append(
+            f"La spécialité « {specialty_label} » présente un volume fragmenté suffisant "
             "pour justifier un nouveau HDJ dédié."
         )
 
@@ -145,8 +203,11 @@ def recommend_scenario(results: dict[str, ScenarioResult]) -> dict:
         "recommended_scenario": best,
         "recommended_label": SCENARIO_LABELS.get(best, best),
         "scores": {SCENARIO_LABELS.get(k, k): round(v, 2) for k, v in scores.items()},
+        "net_gains_eur": {
+            SCENARIO_LABELS.get(k, k): round(v, 0) for k, v in net_gains.items()
+        },
         "reasons": reasons,
-        "proposed_hdj_specialty": best_result.new_hdj_specialty,
+        "proposed_hdj_specialty": focus or best_result.new_hdj_specialty,
         "proposed_hdj_slots": best_result.new_hdj_slots,
     }
 
@@ -158,10 +219,10 @@ def run_full_analysis(
     results = run_all_scenarios(data, data.config)
     return {
         "results": results,
-        "comparison": build_comparison_table(results),
+        "comparison": build_comparison_table(results, data.config),
         "deltas": compute_baseline_delta(results),
         "conversion_opportunity": specialty_conversion_opportunity(
             data, results["status_quo"]
         ),
-        "recommendation": recommend_scenario(results),
+        "recommendation": recommend_scenario(results, data),
     }

@@ -243,6 +243,7 @@ def patients_to_dataframe(state: SimulationState) -> pd.DataFrame:
                 "pathway_mode": p.assigned_mode.value,
                 "simulated_wait_days": p.simulated_wait_days,
                 "revenue_eur": p.revenue_eur,
+                "is_fragmented": p.is_fragmented,
                 "hdj_eligible": p.hdj_eligible,
                 "coordination_need": p.coordination_need,
             }

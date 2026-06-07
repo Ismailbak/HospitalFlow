@@ -32,7 +32,9 @@ class ScenarioResult:
 
 
 def _identify_new_hdj_candidate(data: HospitalData) -> str:
-    """Pick specialty with highest HDJ conversion potential."""
+    """Use the specialty chosen by the user for a new HDJ."""
+    if data.config.focus_specialty:
+        return data.config.focus_specialty
     ranked = data.specialties.sort_values(
         ["conversion_potential", "fragmented_count"],
         ascending=False,

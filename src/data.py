@@ -1,11 +1,9 @@
-"""Synthetic hospital pathway data and configuration for HDJ simulation."""
+"""Hospital pathway data built entirely from user inputs."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
 
-import numpy as np
 import pandas as pd
 
 SPECIALTIES = [
@@ -25,21 +23,29 @@ SCENARIO_LABELS = {
 
 @dataclass
 class SimulationConfig:
-    """User-adjustable simulation parameters."""
+    """All simulation parameters — every value must come from user input."""
 
-    patient_volume_multiplier: float = 1.0
-    room_capacity_multiplier: float = 1.0
+    total_patients: int = 0
+    fragmentation_pct: float = 0.0
+    hdj_eligible_pct: float = 0.0
+    avg_wait_days: int = 0
+    avg_act_count: int = 2
     slot_duration_minutes: int = 30
     grouping_rate: float = 0.35
-    fragmented_tariff_eur: float = 180.0
-    hdj_tariff_eur: float = 420.0
+    fragmented_tariff_eur: float = 0.0
+    hdj_tariff_eur: float = 0.0
     simulation_days: int = 30
-    random_seed: int = 42
+    focus_specialty: str | None = None
+    hdj_unit_count: int = 1
+    hdj_total_beds: int = 0
+    hdj_daily_slots: int = 0
+    hdj_exam_capacity_per_day: int = 0
+    hdj_setup_cost_per_slot: float = 0.0
 
 
 @dataclass
 class HospitalData:
-    """Container for synthetic hospital datasets."""
+    """Container for hospital datasets derived from user inputs."""
 
     patients: pd.DataFrame
     hdj_units: pd.DataFrame
@@ -48,64 +54,72 @@ class HospitalData:
     config: SimulationConfig = field(default_factory=SimulationConfig)
 
 
-def _rng(seed: int) -> np.random.Generator:
-    return np.random.default_rng(seed)
+def _split_evenly(total: int, parts: int) -> list[int]:
+    """Split an integer total evenly across parts (deterministic)."""
+    if parts <= 0:
+        return []
+    base, remainder = divmod(int(total), parts)
+    return [base + (1 if i < remainder else 0) for i in range(parts)]
 
 
-def generate_synthetic_data(config: SimulationConfig | None = None) -> HospitalData:
-    """Generate realistic synthetic ambulatory / HDJ pathway data."""
-    config = config or SimulationConfig()
-    rng = _rng(config.random_seed)
-    n_patients = int(500 * config.patient_volume_multiplier)
+def build_hdj_units(config: SimulationConfig) -> pd.DataFrame:
+    """Build HDJ units by splitting user-entered capacity across their units."""
+    n_units = max(1, int(config.hdj_unit_count))
+    focus = config.focus_specialty or SPECIALTIES[0]
+    daily_slots = _split_evenly(config.hdj_daily_slots, n_units)
+    rooms = _split_evenly(config.hdj_total_beds, n_units)
+    exams = _split_evenly(config.hdj_exam_capacity_per_day, n_units)
 
-    specialty_weights = np.array([0.22, 0.20, 0.18, 0.15, 0.25])
-    specialty_weights /= specialty_weights.sum()
-
-    patient_ids = [f"P{i:04d}" for i in range(1, n_patients + 1)]
-    specialties = rng.choice(SPECIALTIES, size=n_patients, p=specialty_weights)
-    complexity = rng.integers(1, 6, size=n_patients)
-    act_counts = rng.integers(1, 6, size=n_patients)
-    visit_frequency = rng.integers(1, 13, size=n_patients)
-    coordination_need = rng.uniform(0.2, 1.0, size=n_patients).round(2)
-    fragmented = rng.random(n_patients) < (0.55 - 0.05 * (complexity - 3))
-
-    base_wait = rng.integers(8, 45, size=n_patients)
-    wait_days = (base_wait + act_counts * 3 + (1 - coordination_need) * 10).astype(int)
-
-    patients = pd.DataFrame(
+    return pd.DataFrame(
         {
-            "patient_id": patient_ids,
-            "specialty": specialties,
-            "complexity": complexity,
-            "act_count": act_counts,
-            "visit_frequency_per_year": visit_frequency,
-            "coordination_need": coordination_need,
-            "is_fragmented": fragmented,
-            "baseline_wait_days": wait_days,
-            "hdj_eligible": (
-                (act_counts >= 2)
-                & (coordination_need >= 0.45)
-                & fragmented
-            ),
+            "hdj_id": [f"HDJ_{i + 1}" for i in range(n_units)],
+            "name": [f"HDJ {focus.replace('_', ' ').title()} — unité {i + 1}" for i in range(n_units)],
+            "specialty_focus": [focus] * n_units,
+            "daily_slots": daily_slots,
+            "rooms": rooms,
+            "exam_capacity_per_day": exams,
         }
     )
 
-    hdj_units = pd.DataFrame(
-        {
-            "hdj_id": ["HDJ_A", "HDJ_B", "HDJ_C"],
-            "name": ["HDJ Oncologie", "HDJ Cardio-Diabète", "HDJ Néphrologie"],
-            "specialty_focus": ["oncologie", "cardiologie", "nephrologie"],
-            "daily_slots": (
-                np.array([18, 22, 14]) * config.room_capacity_multiplier
-            ).astype(int),
-            "rooms": (
-                np.array([4, 5, 3]) * config.room_capacity_multiplier
-            ).astype(int),
-            "exam_capacity_per_day": (
-                np.array([12, 15, 10]) * config.room_capacity_multiplier
-            ).astype(int),
-        }
-    )
+
+def build_patients(config: SimulationConfig) -> pd.DataFrame:
+    """Build patient rows deterministically from user-entered clinical indicators."""
+    if not config.focus_specialty:
+        raise ValueError("La spécialité à analyser est obligatoire.")
+    if config.total_patients <= 0:
+        raise ValueError("Le nombre de patients doit être supérieur à 0.")
+
+    n = int(config.total_patients)
+    n_frag = min(n, round(n * config.fragmentation_pct / 100))
+    n_eligible = min(n_frag, round(n * config.hdj_eligible_pct / 100))
+    acts = max(1, int(config.avg_act_count))
+    base_wait = max(1, int(config.avg_wait_days))
+
+    rows = []
+    for i in range(n):
+        is_fragmented = i < n_frag
+        hdj_eligible = is_fragmented and i < n_eligible
+        rows.append(
+            {
+                "patient_id": f"P{i + 1:04d}",
+                "specialty": config.focus_specialty,
+                "complexity": 3,
+                "act_count": acts if is_fragmented else max(1, acts - 1),
+                "visit_frequency_per_year": 6,
+                "coordination_need": 0.75 if hdj_eligible else 0.35,
+                "is_fragmented": is_fragmented,
+                "baseline_wait_days": base_wait + (10 if is_fragmented else 0),
+                "hdj_eligible": hdj_eligible and acts >= 2,
+            }
+        )
+
+    return pd.DataFrame(rows)
+
+
+def build_hospital_data(config: SimulationConfig) -> HospitalData:
+    """Assemble a full hospital dataset from user configuration only."""
+    patients = build_patients(config)
+    hdj_units = build_hdj_units(config)
 
     resources = pd.DataFrame(
         {
@@ -147,15 +161,6 @@ def generate_synthetic_data(config: SimulationConfig | None = None) -> HospitalD
     )
 
 
-def load_hospital_data(
-    source: str = "synthetic",
-    config: SimulationConfig | None = None,
-    **kwargs: Any,
-) -> HospitalData:
-    """
-    Load hospital data. Currently supports synthetic data only.
-    Future: plug anonymized PMSI / CCAM / consultation extracts here.
-    """
-    if source == "synthetic":
-        return generate_synthetic_data(config)
-    raise ValueError(f"Unknown data source: {source}")
+def load_hospital_data(config: SimulationConfig) -> HospitalData:
+    """Load hospital data from user configuration."""
+    return build_hospital_data(config)
