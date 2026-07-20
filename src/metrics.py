@@ -118,9 +118,9 @@ def recommend_scenario(
     data: HospitalData,
 ) -> dict:
     """
-    Score scenarios and return a governance-friendly recommendation.
-    Uses net financial gain (revenus − investissement structurel) so that
-    « statu quo » or « optimiser l'existant » win when a new HDJ is not worth it.
+    Recommend the scenario with the best net gain vs statu quo.
+    Prefer creating a new HDJ when it beats optimisation on net value,
+    especially if existing capacity is saturated (>= 85 %).
     """
     baseline = results["status_quo"].summary
     config = data.config
@@ -146,15 +146,27 @@ def recommend_scenario(
         )
         scores[scenario] = score
 
-    best = max(scores, key=scores.get)
     optimize = results["optimize_existing"]
     optimize_net = net_gains["optimize_existing"]
     new_net = net_gains["new_hdj"]
+    optimize_sat = optimize.summary["max_resource_saturation"]
+    new_sat = results["new_hdj"].summary["max_resource_saturation"]
     marginal_new_vs_opt = new_net - optimize_net
 
-    # Prefer existing HDJ optimisation when a new unit adds little net value.
-    if best == "new_hdj" and marginal_new_vs_opt < 0:
+    if optimize_net <= 0 and new_net <= 0:
+        best = "status_quo"
+    elif new_net > optimize_net and new_net > 0:
+        best = "new_hdj"
+    elif optimize_net > 0:
         best = "optimize_existing"
+    elif new_net > 0:
+        best = "new_hdj"
+    else:
+        best = "status_quo"
+
+    # Saturated existing capacity: favour a new unit if it is net-positive vs optimise.
+    if optimize_sat >= 0.85 and marginal_new_vs_opt > 0:
+        best = "new_hdj"
 
     best_result = results[best]
     specialty_label = focus or best_result.summary.get("proposed_hdj_specialty", "N/A")
@@ -166,8 +178,8 @@ def recommend_scenario(
             "l'emportent sur les bénéfices attendus."
         )
         reasons.append(
-            f"Le statu quo évite un investissement structurel "
-            f"(gain net des autres scénarios ≤ 0 €)."
+            "Le statu quo évite un investissement structurel "
+            "(gain net des autres scénarios ≤ 0 €)."
         )
     elif best == "optimize_existing":
         reasons.append(
@@ -175,13 +187,18 @@ def recommend_scenario(
             f"(revenus supplémentaires, sans ouvrir de nouvelle unité)."
         )
         reasons.append(
-            "L'optimisation des HDJ existants réduit les délais et améliore la "
-            "valorisation sans investissement lourd."
+            "L'optimisation des HDJ existants offre le meilleur rapport "
+            "bénéfice / investissement dans votre configuration."
         )
         if marginal_new_vs_opt < 0:
             reasons.append(
-                f"Créer un nouveau HDJ n'apporte que {_fmt_eur(marginal_new_vs_opt)} € net "
-                f"vs optimiser l'existant — insuffisant pour justifier l'ouverture."
+                f"Créer un nouveau HDJ coûterait {_fmt_eur(abs(marginal_new_vs_opt))} € de gain net "
+                f"de plus que l'optimisation — investissement non rentable."
+            )
+        if optimize_sat >= 0.85:
+            reasons.append(
+                f"Saturation des HDJ existants : {optimize_sat * 100:.0f} % — "
+                "surveiller la capacité même avec cette recommandation."
             )
     else:
         invest = scenario_investment(best_result, config)
@@ -189,6 +206,16 @@ def recommend_scenario(
             f"Gain net estimé : {_fmt_eur(new_net)} € vs statu quo "
             f"(dont −{_fmt_eur(invest)} € d'investissement structurel)."
         )
+        if marginal_new_vs_opt > 0:
+            reasons.append(
+                f"Création d'un nouveau HDJ : +{_fmt_eur(marginal_new_vs_opt)} € de gain net "
+                f"vs optimiser l'existant ({_fmt_eur(optimize_net)} €)."
+            )
+        if optimize_sat >= 0.85:
+            reasons.append(
+                f"Les HDJ existants sont saturés ({optimize_sat * 100:.0f} %) "
+                f"contre {new_sat * 100:.0f} % avec une unité dédiée."
+            )
         reasons.append(
             f"La spécialité « {specialty_label} » présente un volume fragmenté suffisant "
             "pour justifier un nouveau HDJ dédié."

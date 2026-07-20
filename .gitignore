@@ -23,4 +23,8 @@ Thumbs.db
 
 # Data outputs
 data/results/
+data/last_inputs.json
 *.log
+
+# CHU clinical extracts (hashed but still sensitive — keep local)
+documents/data/*.xlsx

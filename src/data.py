@@ -41,6 +41,37 @@ class SimulationConfig:
     hdj_daily_slots: int = 0
     hdj_exam_capacity_per_day: int = 0
     hdj_setup_cost_per_slot: float = 0.0
+    # Optional priors from CHU extracts (documents/data)
+    mean_age: float | None = None
+    visits_per_patient: float | None = None
+    metabolic_cohort_pct: float = 0.0
+    data_backed: bool = False
+
+
+def config_cache_key(config: SimulationConfig) -> tuple:
+    """Hashable snapshot for Streamlit cache keys."""
+    return (
+        config.total_patients,
+        config.fragmentation_pct,
+        config.hdj_eligible_pct,
+        config.avg_wait_days,
+        config.avg_act_count,
+        config.slot_duration_minutes,
+        config.grouping_rate,
+        config.fragmented_tariff_eur,
+        config.hdj_tariff_eur,
+        config.simulation_days,
+        config.focus_specialty,
+        config.hdj_unit_count,
+        config.hdj_total_beds,
+        config.hdj_daily_slots,
+        config.hdj_exam_capacity_per_day,
+        config.hdj_setup_cost_per_slot,
+        config.mean_age,
+        config.visits_per_patient,
+        config.metabolic_cohort_pct,
+        config.data_backed,
+    )
 
 
 @dataclass
@@ -94,22 +125,33 @@ def build_patients(config: SimulationConfig) -> pd.DataFrame:
     n_eligible = min(n_frag, round(n * config.hdj_eligible_pct / 100))
     acts = max(1, int(config.avg_act_count))
     base_wait = max(1, int(config.avg_wait_days))
+    visit_freq = max(1.0, float(config.visits_per_patient or 2.0))
+    # Approximate annual frequency from observed visits/patient in extract period
+    annual_visits = max(1, round(visit_freq * 3))
+    n_metabolic = min(n, round(n * max(0.0, float(config.metabolic_cohort_pct)) / 100))
+    mean_age = config.mean_age
 
     rows = []
     for i in range(n):
         is_fragmented = i < n_frag
         hdj_eligible = is_fragmented and i < n_eligible
+        is_metabolic = i < n_metabolic
+        complexity = 4 if is_metabolic else (3 if is_fragmented else 2)
+        if mean_age is not None and mean_age >= 55 and is_fragmented:
+            complexity = min(5, complexity + 1)
+        coord = 0.85 if is_metabolic else (0.75 if hdj_eligible else 0.35)
         rows.append(
             {
                 "patient_id": f"P{i + 1:04d}",
                 "specialty": config.focus_specialty,
-                "complexity": 3,
+                "complexity": complexity,
                 "act_count": acts if is_fragmented else max(1, acts - 1),
-                "visit_frequency_per_year": 6,
-                "coordination_need": 0.75 if hdj_eligible else 0.35,
+                "visit_frequency_per_year": annual_visits + (2 if is_metabolic else 0),
+                "coordination_need": coord,
                 "is_fragmented": is_fragmented,
                 "baseline_wait_days": base_wait + (10 if is_fragmented else 0),
                 "hdj_eligible": hdj_eligible and acts >= 2,
+                "metabolic_cohort": is_metabolic,
             }
         )
 

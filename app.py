@@ -12,18 +12,44 @@ import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
 
+import importlib
+
 import src.data
 import src.agents
 import src.simulation
 import src.metrics
+import src.external_data
+
+importlib.reload(src.data)
+importlib.reload(src.agents)
+importlib.reload(src.simulation)
+importlib.reload(src.metrics)
+importlib.reload(src.external_data)
 
 from src.data import (
     SCENARIO_LABELS,
     SPECIALTIES,
     SimulationConfig,
+    config_cache_key,
     load_hospital_data,
 )
+from src.external_data import (
+    apply_priors_to_session,
+    compute_hospital_snapshot,
+    compute_specialty_priors,
+    data_dir_available,
+    specialty_has_extract,
+)
 from src.metrics import run_full_analysis
+from src.user_prefs import (
+    PREF_KEYS,
+    apply_saved_inputs,
+    clear_saved_inputs,
+    save_inputs,
+    sync_wiz_to_cfg,
+)
+
+ANALYSIS_CACHE_VERSION = 8
 
 _ASSETS = Path(__file__).resolve().parent / "assets"
 _LOGO_PATH = _ASSETS / "logo.png"
@@ -675,6 +701,7 @@ def sankey_chart(summary: dict) -> go.Figure:
 # --- Splash & landing gates ---
 st.session_state.setdefault("splash_done", False)
 st.session_state.setdefault("entered", False)
+_prefs_loaded = apply_saved_inputs(st.session_state)
 
 
 def render_splash() -> None:
@@ -763,8 +790,31 @@ def render_workspace_header() -> None:
 
 
 @st.cache_data(show_spinner=False)
-def load_analysis(_config: SimulationConfig, _version: int = 5):
-    return run_full_analysis(load_hospital_data(_config))
+def load_analysis(_config_key: tuple, _version: int = ANALYSIS_CACHE_VERSION):
+    config = SimulationConfig(
+        total_patients=_config_key[0],
+        fragmentation_pct=_config_key[1],
+        hdj_eligible_pct=_config_key[2],
+        avg_wait_days=_config_key[3],
+        avg_act_count=_config_key[4],
+        slot_duration_minutes=_config_key[5],
+        grouping_rate=_config_key[6],
+        fragmented_tariff_eur=_config_key[7],
+        hdj_tariff_eur=_config_key[8],
+        simulation_days=_config_key[9],
+        focus_specialty=_config_key[10],
+        hdj_unit_count=_config_key[11],
+        hdj_total_beds=_config_key[12],
+        hdj_daily_slots=_config_key[13],
+        hdj_exam_capacity_per_day=_config_key[14],
+        hdj_setup_cost_per_slot=_config_key[15],
+    )
+    return run_full_analysis(load_hospital_data(config))
+
+
+if st.session_state.get("_analysis_cache_v") != ANALYSIS_CACHE_VERSION:
+    load_analysis.clear()
+    st.session_state["_analysis_cache_v"] = ANALYSIS_CACHE_VERSION
 
 
 def store_last_analysis(analysis: dict) -> None:
@@ -863,7 +913,7 @@ WIZ_STEPS = [
 ]
 
 WIZ_STEP_INTRO = {
-    2: "L'agent lit vos données et reconstruit les parcours réels : combien de patients, quelle fragmentation, quelle spécialité.",
+    2: "L'agent lit vos données (et les extracts CHU s'ils sont disponibles) : volumes, fragmentation, calendrier d'arrivée, unités et facturation.",
     3: "Le système instancie des agents autonomes qui représentent chaque acteur du parcours ambulatoire.",
     4: "L'agent de triage oriente chaque patient vers le mode de prise en charge le plus pertinent.",
     5: "L'ordonnanceur affecte les patients aux capacités et vérifie qu'aucune ressource n'est saturée.",
@@ -873,7 +923,11 @@ WIZ_STEP_INTRO = {
 
 
 def build_simulation_config(use_cfg_prefix: bool = False) -> SimulationConfig:
-    """Build SimulationConfig entirely from wizard or sidebar session state."""
+    """Build SimulationConfig from wizard/sidebar session state (+ optional CHU priors)."""
+    mean_age = st.session_state.get("wiz_mean_age")
+    visits = st.session_state.get("wiz_visits_per_patient")
+    metabolic = float(st.session_state.get("wiz_metabolic_pct") or 0.0)
+    data_backed = bool(st.session_state.get("wiz_data_backed"))
     if use_cfg_prefix:
         return SimulationConfig(
             total_patients=int(st.session_state["cfg_patients"]),
@@ -892,6 +946,10 @@ def build_simulation_config(use_cfg_prefix: bool = False) -> SimulationConfig:
             hdj_daily_slots=int(st.session_state["cfg_hdj_slots"]),
             hdj_exam_capacity_per_day=int(st.session_state["cfg_hdj_exams"]),
             hdj_setup_cost_per_slot=float(st.session_state["cfg_setup_cost"]),
+            mean_age=float(mean_age) if mean_age is not None else None,
+            visits_per_patient=float(visits) if visits is not None else None,
+            metabolic_cohort_pct=metabolic if data_backed else 0.0,
+            data_backed=data_backed,
         )
     return SimulationConfig(
         total_patients=int(st.session_state["wiz_patients"]),
@@ -910,6 +968,10 @@ def build_simulation_config(use_cfg_prefix: bool = False) -> SimulationConfig:
         hdj_daily_slots=int(st.session_state["wiz_hdj_slots"]),
         hdj_exam_capacity_per_day=int(st.session_state["wiz_hdj_exams"]),
         hdj_setup_cost_per_slot=float(st.session_state["wiz_setup_cost"]),
+        mean_age=float(mean_age) if mean_age is not None else None,
+        visits_per_patient=float(visits) if visits is not None else None,
+        metabolic_cohort_pct=metabolic if data_backed else 0.0,
+        data_backed=data_backed,
     )
 
 
@@ -925,6 +987,146 @@ def _wiz_value(key: str, default: int, *, lo: int, hi: int) -> int:
 
 def wizard_config() -> SimulationConfig:
     return build_simulation_config(use_cfg_prefix=False)
+
+
+@st.cache_data(show_spinner="Chargement des extracts CHU…")
+def cached_hospital_snapshot():
+    return compute_hospital_snapshot()
+
+
+@st.cache_data(show_spinner=False)
+def cached_specialty_priors(specialty: str):
+    return compute_specialty_priors(specialty)
+
+
+def render_chu_data_panels(specialty: str | None) -> None:
+    """Medium-value charts from documents/data extracts."""
+    if not data_dir_available():
+        st.info("Aucun fichier Excel trouvé dans `documents/data`.")
+        return
+
+    snap = cached_hospital_snapshot()
+    if snap is None:
+        st.warning("Impossible de lire les extracts CHU.")
+        return
+
+    st.markdown("### Données CHU (consultations externes)")
+    st.caption(
+        f"{snap.total_rows:,} lignes · {snap.total_patients:,} patients · "
+        f"période {snap.period_start} → {snap.period_end} · "
+        f"{snap.n_patients_multi_specialty} patients multi-spécialités. "
+        "Ces extractions ne sont pas des séjours HDJ."
+    )
+
+    # Demand ranking
+    st.markdown("#### Demande par spécialité (extracts)")
+    fig_demand = px.bar(
+        snap.demand_ranking,
+        x="label",
+        y="patients",
+        text="patients",
+        labels={"label": "", "patients": "Patients uniques"},
+        color_discrete_sequence=[C_PRIMARY],
+    )
+    fig_demand.update_traces(textposition="outside")
+    fig_demand.update_layout(height=280, showlegend=False)
+    st.plotly_chart(style_chart(fig_demand), use_container_width=True)
+
+    c1, c2 = st.columns(2)
+    with c1:
+        st.markdown("#### Arrivées par jour")
+        fig_dow = px.bar(
+            snap.arrival_by_dow,
+            x="jour",
+            y="passages",
+            labels={"jour": "", "passages": "Passages"},
+            color_discrete_sequence=[C_ACCENT],
+        )
+        fig_dow.update_layout(height=260, showlegend=False)
+        st.plotly_chart(style_chart(fig_dow), use_container_width=True)
+    with c2:
+        st.markdown("#### Arrivées par heure")
+        fig_h = px.bar(
+            snap.arrival_by_hour,
+            x="heure",
+            y="passages",
+            labels={"heure": "Heure", "passages": "Passages"},
+            color_discrete_sequence=[C_PRIMARY_MID],
+        )
+        fig_h.update_layout(height=260, showlegend=False)
+        st.plotly_chart(style_chart(fig_h), use_container_width=True)
+
+    c3, c4 = st.columns(2)
+    with c3:
+        st.markdown("#### Mix NGAP (facturation)")
+        ngap = snap.ngap_by_extract.copy()
+        ngap = ngap[ngap["ngap"] != "MISSING"]
+        if len(ngap):
+            fig_ngap = px.bar(
+                ngap,
+                x="label",
+                y="count",
+                color="ngap",
+                labels={"label": "", "count": "Cotations", "ngap": "NGAP"},
+                color_discrete_sequence=CHART_SEQUENCE + [C_ACCENT, C_PRIMARY_LIGHT],
+            )
+            fig_ngap.update_layout(height=300)
+            st.plotly_chart(style_chart(fig_ngap), use_container_width=True)
+        else:
+            st.caption("Pas de cotations NGAP exploitables.")
+    with c4:
+        st.markdown("#### Unités les plus fréquentes")
+        fig_u = px.bar(
+            snap.top_units_global.sort_values("passages"),
+            x="passages",
+            y="unite",
+            orientation="h",
+            labels={"unite": "", "passages": "Passages"},
+            color_discrete_sequence=[C_PRIMARY],
+        )
+        fig_u.update_layout(height=300, showlegend=False)
+        st.plotly_chart(style_chart(fig_u), use_container_width=True)
+
+    if len(snap.overlap_pairs):
+        st.markdown("#### Chevauchements multi-spécialités")
+        st.caption(
+            "Patients présents dans au moins deux extracts — signal de parcours transverses."
+        )
+        ov = snap.overlap_pairs.head(8).copy()
+        ov["paire"] = ov["a"] + " ↔ " + ov["b"]
+        fig_o = px.bar(
+            ov,
+            x="patients",
+            y="paire",
+            orientation="h",
+            labels={"paire": "", "patients": "Patients"},
+            color_discrete_sequence=[C_ACCENT],
+        )
+        fig_o.update_layout(height=280, showlegend=False)
+        st.plotly_chart(style_chart(fig_o), use_container_width=True)
+
+    # Specialty-specific callouts
+    if specialty and specialty_has_extract(specialty):
+        priors = cached_specialty_priors(specialty)
+        if priors.has_data:
+            st.markdown(f"#### Focus — {format_specialty(specialty)}")
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Patients extract", f"{priors.n_patients}")
+            m2.metric("Âge moyen", f"{priors.mean_age:.0f} ans")
+            m3.metric("Visites / patient", f"{priors.visits_per_patient:.2f}")
+            m4.metric("Multi-spécialité", f"{priors.cross_specialty_patients}")
+            if specialty == "diabetologie" and priors.metabolic_patients:
+                st.info(
+                    f"**Cohorte métabolique urgences :** {priors.metabolic_patients} patients "
+                    f"({priors.metabolic_pct:.0f} %) avec diagnostic diabète / hypoglycémie / "
+                    f"hypokaliémie — base du cas d'usage HDJ diabétique complexe. "
+                    f"Période {priors.period_start} → {priors.period_end}."
+                )
+            if priors.top_units:
+                st.caption(
+                    "Unités principales : "
+                    + ", ".join(f"{u} ({c})" for u, c in priors.top_units[:4])
+                )
 
 
 def render_wizard_header(step: int, chip_html: str) -> None:
@@ -980,24 +1182,40 @@ def render_wizard() -> None:
 
     # Step 0: specialty first
     if step == 0:
+        chu_ok = data_dir_available()
+        msg = (
+            "Commencez par <strong>choisir la spécialité</strong> à analyser. "
+            "Toute l'analyse (file active, parcours, capacité HDJ) portera sur ce périmètre."
+        )
+        if chu_ok:
+            msg += (
+                " Les spécialités liées aux extracts CHU préremplissent volumes et profils "
+                "à l'étape suivante."
+            )
         render_html(
-            '<div class="assistant-msg">Commencez par <strong>choisir la spécialité</strong> à analyser. '
-            "Toute l'analyse (file active, parcours, capacité HDJ) portera sur ce périmètre.</div>"
+            f'<div class="assistant-msg">{msg}</div>'
             '<div class="specialty-choose-heading">Choisir</div>'
             '<div class="specialty-picker" aria-hidden="true"></div>'
         )
         cols = st.columns(len(SPECIALTIES))
         for col, spec in zip(cols, SPECIALTIES):
             icon, blurb = SPECIALTY_META[spec]
+            badge = ""
+            if specialty_has_extract(spec) and chu_ok:
+                pri = cached_specialty_priors(spec)
+                if pri.has_data:
+                    badge = f"\n📊 {pri.n_patients} patients CHU"
             with col:
                 if st.button(
-                    f"{icon}\n{format_specialty(spec)}\n{blurb}",
+                    f"{icon}\n{format_specialty(spec)}\n{blurb}{badge}",
                     key=f"pick_{spec}",
                     use_container_width=True,
                     type="secondary",
                 ):
                     st.session_state["wiz_specialty"] = spec
+                    apply_priors_to_session(st.session_state, spec)
                     st.session_state["wizard_step"] = 1
+                    save_inputs(st.session_state)
                     st.rerun()
         return
 
@@ -1007,11 +1225,28 @@ def render_wizard() -> None:
             st.session_state["wizard_step"] = 0
             st.rerun()
         focus_label = format_specialty(specialty)
-        render_html(
-            f'<div class="assistant-msg">Spécialité sélectionnée : <strong>{focus_label}</strong> — '
-            "renseignez maintenant les données pour cette spécialité. "
-            "Tous les champs concernent <strong>vos chiffres réels</strong> (aucune donnée fictive).</div>"
-        )
+        data_backed = bool(st.session_state.get("wiz_data_backed"))
+        if data_backed:
+            period = st.session_state.get("wiz_period", "")
+            note = st.session_state.get("wiz_data_note", "")
+            render_html(
+                f'<div class="assistant-msg">Spécialité : <strong>{focus_label}</strong> — '
+                f"champs préremplis depuis les <strong>extracts CHU</strong>"
+                f"{f' ({period})' if period else ''}. "
+                "Ajustez si besoin ; les tarifs restent à votre charge.</div>"
+            )
+            if note:
+                st.caption(note)
+            if st.button("Recharger les suggestions CHU"):
+                apply_priors_to_session(st.session_state, specialty)
+                save_inputs(st.session_state)
+                st.rerun()
+        else:
+            render_html(
+                f'<div class="assistant-msg">Spécialité sélectionnée : <strong>{focus_label}</strong> — '
+                "renseignez les données pour cette spécialité. "
+                "Aucun extract CHU n'est lié à ce périmètre (saisie manuelle).</div>"
+            )
         if st.button("← Changer de spécialité"):
             st.session_state["wizard_step"] = 0
             st.rerun()
@@ -1020,37 +1255,50 @@ def render_wizard() -> None:
             c1, c2 = st.columns(2)
             with c1:
                 patients = st.number_input(
-                    "Nombre de patients (file active)", 50, 2000,
-                    int(st.session_state.get("wiz_patients", 100)), 10,
-                    help="Patients ambulatoires sur la période analysée.",
+                    "Nombre de patients (file active)", 50, 3000,
+                    _wiz_value("wiz_patients", 100, lo=50, hi=3000), 10,
+                    help="Patients ambulatoires sur la période analysée (prérempli si extract CHU).",
                 )
                 fragmentation_pct = st.number_input(
                     "Parcours fragmentés (%)", 1, 100,
-                    int(st.session_state.get("wiz_fragmentation_pct", 50)), 1,
+                    _wiz_value("wiz_fragmentation_pct", 50, lo=1, hi=100), 1,
                     help="Part des patients avec actes dispersés (consultation, examen, soin séparés).",
                 )
                 avg_wait = st.number_input(
                     "Délai moyen d'attente actuel (jours)", 1, 120,
-                    int(st.session_state.get("wiz_avg_wait", 30)), 1,
+                    _wiz_value("wiz_avg_wait", 30, lo=1, hi=120), 1,
                 )
                 avg_acts = st.number_input(
                     "Nombre moyen d'actes par patient", 2, 10,
-                    int(st.session_state.get("wiz_avg_acts", 3)), 1,
+                    _wiz_value("wiz_avg_acts", 3, lo=2, hi=10), 1,
                 )
             with c2:
                 hdj_eligible_pct = st.number_input(
                     "Patients convertibles en HDJ (%)", 1, 100,
-                    int(st.session_state.get("wiz_hdj_eligible_pct", 30)), 1,
+                    _wiz_value("wiz_hdj_eligible_pct", 30, lo=1, hi=100), 1,
                     help="Part de la file pouvant être regroupée en hospitalisation de jour.",
                 )
                 days = st.selectbox(
                     "Horizon d'analyse (jours)", [14, 30, 60],
-                    index=[14, 30, 60].index(st.session_state.get("wiz_days", 30)),
+                    index=[14, 30, 60].index(st.session_state.get("wiz_days", 30))
+                    if st.session_state.get("wiz_days", 30) in (14, 30, 60)
+                    else 1,
                 )
                 slot = st.selectbox(
                     "Durée moyenne d'un créneau (min)", [20, 30, 45, 60],
-                    index=[20, 30, 45, 60].index(st.session_state.get("wiz_slot", 30)),
+                    index=[20, 30, 45, 60].index(st.session_state.get("wiz_slot", 30))
+                    if st.session_state.get("wiz_slot", 30) in (20, 30, 45, 60)
+                    else 1,
                 )
+                if data_backed:
+                    st.metric(
+                        "Âge moyen (extract)",
+                        f"{float(st.session_state.get('wiz_mean_age') or 0):.0f} ans",
+                    )
+                    st.metric(
+                        "Visites / patient (extract)",
+                        f"{float(st.session_state.get('wiz_visits_per_patient') or 0):.2f}",
+                    )
 
             st.markdown("**Tarification**")
             t1, t2, t3 = st.columns(3)
@@ -1087,20 +1335,20 @@ def render_wizard() -> None:
             with cap1:
                 hdj_units = st.number_input(
                     "Nombre d'unités HDJ", 1, 6,
-                    int(st.session_state.get("wiz_hdj_units", 1)), 1,
+                    _wiz_value("wiz_hdj_units", 1, lo=1, hi=6), 1,
                 )
                 hdj_beds = st.number_input(
                     "Places / lits HDJ (total)", 1, 100,
-                    int(st.session_state.get("wiz_hdj_beds", 1)), 1,
+                    _wiz_value("wiz_hdj_beds", 1, lo=1, hi=100), 1,
                 )
             with cap2:
                 hdj_slots = st.number_input(
                     "Créneaux patients / jour (total)", 1, 200,
-                    int(st.session_state.get("wiz_hdj_slots", 1)), 1,
+                    _wiz_value("wiz_hdj_slots", 1, lo=1, hi=200), 1,
                 )
                 hdj_exams = st.number_input(
                     "Examens techniques / jour", 1, 100,
-                    int(st.session_state.get("wiz_hdj_exams", 1)), 1,
+                    _wiz_value("wiz_hdj_exams", 1, lo=1, hi=100), 1,
                 )
 
             submitted = st.form_submit_button(
@@ -1131,13 +1379,14 @@ def render_wizard() -> None:
             st.session_state["wiz_hdj"] = int(hdj)
             st.session_state["wiz_setup_cost"] = int(setup_cost)
             st.session_state["wizard_step"] = 2
+            save_inputs(st.session_state)
             st.rerun()
         return
 
     # Steps 2+: run analysis and reveal one stage at a time
     cfg = wizard_config()
     with st.spinner("L'agent travaille…"):
-        wa = load_analysis(cfg)
+        wa = load_analysis(config_cache_key(cfg))
     store_last_analysis(wa)
     wresults = wa["results"]
     wrec = wa["recommendation"]
@@ -1184,6 +1433,17 @@ def render_wizard() -> None:
             f"{focus_frag:.0f} % fragmentés",
             f"{focus_frag_n} / {focus_count} patients",
         )
+        if cfg.data_backed:
+            meta_n = (
+                int(source_patients["metabolic_cohort"].sum())
+                if "metabolic_cohort" in source_patients.columns
+                else 0
+            )
+            src = st.session_state.get("wiz_period", "extracts CHU")
+            st.success(
+                f"Paramètres ancrés sur les extracts CHU ({src})"
+                + (f" · cohorte métabolique simulée : {meta_n} patients" if meta_n else "")
+            )
         fig = px.bar(
             spec_stats.sort_values("fragmentation_pct", ascending=False),
             x="specialty",
@@ -1201,7 +1461,7 @@ def render_wizard() -> None:
             f"**{format_specialty(focus)}** : {focus_frag_n} parcours fragmentés "
             f"sur {focus_count} patients ({focus_frag:.0f} %)."
         )
-        with st.expander("Comment ce taux est calculé ?", expanded=True):
+        with st.expander("Comment ce taux est calculé ?", expanded=False):
             hdj_eligible_count = int(source_patients["hdj_eligible"].sum())
             guidance = fragmentation_decision_guidance(
                 frag_pct=float(cfg.fragmentation_pct),
@@ -1213,7 +1473,7 @@ def render_wizard() -> None:
             )
             st.markdown(
                 f"""
-Les chiffres affichés reprennent **exactement vos saisies** :
+Les chiffres affichés reprennent **vos saisies** (préremplies depuis le CHU si disponible) :
 
 - **{int(cfg.fragmentation_pct)} %** de parcours fragmentés → {global_frag_count} patients sur {total}
 - **{int(cfg.hdj_eligible_pct)} %** convertibles en HDJ → {hdj_eligible_count} patients
@@ -1223,18 +1483,18 @@ Les chiffres affichés reprennent **exactement vos saisies** :
 **Formule :** `taux = patients fragmentés ÷ patients total × 100`
 
 {guidance}
-
-Aucune donnée aléatoire ni jeu de démonstration n'est injecté.
                 """
             )
 
+        render_chu_data_panels(focus)
+
     elif step == 3:
         agents = [
-            ("👤 Agents patients", "Chaque patient porte sa spécialité, sa complexité et son besoin de coordination."),
-            ("🏥 Agents ressources / HDJ", "Les HDJ et salles portent leurs contraintes de capacité et de créneaux."),
-            ("🔀 Agent de triage", "Oriente les parcours : fragmenté, HDJ existant ou nouvel HDJ."),
-            ("📅 Agent ordonnanceur", "Lisse les flux et affecte les capacités disponibles."),
-            ("💶 Agent évaluateur", "Estime l'impact médico-économique de chaque scénario."),
+            ("Agents patients", "Chaque patient porte sa spécialité, sa complexité et son besoin de coordination."),
+            ("Agents ressources / HDJ", "Les HDJ et salles portent leurs contraintes de capacité et de créneaux."),
+            ("Agent de triage", "Oriente les parcours : fragmenté, HDJ existant ou nouvel HDJ."),
+            ("Agent ordonnanceur", "Lisse les flux et affecte les capacités disponibles."),
+            ("Agent évaluateur", "Estime l'impact médico-économique de chaque scénario."),
         ]
         for title, desc in agents:
             st.markdown(f"**{title}** — {desc}")
@@ -1319,25 +1579,11 @@ Aucune donnée aléatoire ni jeu de démonstration n'est injecté.
                 st.session_state["wizard_step"] = step + 1
                 st.rerun()
         else:
-            if st.button("Voir le tableau de bord détaillé →", type="primary", use_container_width=True):
-                for src, dst in [
-                    ("wiz_patients", "cfg_patients"),
-                    ("wiz_fragmentation_pct", "cfg_fragmentation_pct"),
-                    ("wiz_hdj_eligible_pct", "cfg_hdj_eligible_pct"),
-                    ("wiz_avg_wait", "cfg_avg_wait"),
-                    ("wiz_avg_acts", "cfg_avg_acts"),
-                    ("wiz_slot", "cfg_slot_duration"),
-                    ("wiz_frag", "cfg_frag_tariff"),
-                    ("wiz_hdj", "cfg_hdj_tariff"),
-                    ("wiz_days", "cfg_sim_days"),
-                    ("wiz_hdj_units", "cfg_hdj_units"),
-                    ("wiz_hdj_beds", "cfg_hdj_beds"),
-                    ("wiz_hdj_slots", "cfg_hdj_slots"),
-                    ("wiz_hdj_exams", "cfg_hdj_exams"),
-                    ("wiz_setup_cost", "cfg_setup_cost"),
-                ]:
-                    st.session_state[dst] = st.session_state[src]
-                st.session_state["wizard_done"] = True
+            if st.button("← Retour à l'accueil", type="primary", use_container_width=True):
+                sync_wiz_to_cfg(st.session_state)
+                save_inputs(st.session_state)
+                st.session_state["entered"] = False
+                st.session_state["wizard_step"] = 0
                 st.rerun()
 
     if step >= 2 and st.button("Recommencer (changer spécialité ou données)"):
@@ -1353,581 +1599,6 @@ if not st.session_state["entered"]:
     render_landing_page()
     st.stop()
 
-# --- Guided wizard gate ---
-st.session_state.setdefault("wizard_done", False)
+# --- Guided wizard ---
 st.session_state.setdefault("wizard_step", 0)
-if not st.session_state["wizard_done"]:
-    render_wizard()
-    st.stop()
-
-# --- Sidebar config defaults (pre-filled by the wizard) ---
-for _k, _v in {
-    "cfg_grouping_rate": 0.35,
-}.items():
-    st.session_state.setdefault(_k, _v)
-
-if st.session_state.get("wizard_done") and "cfg_patients" not in st.session_state:
-    st.warning("Relancez l'analyse guidée pour charger vos données.")
-    st.session_state["wizard_done"] = False
-    st.rerun()
-
-# --- Sidebar: assumptions ---
-st.sidebar.image(str(_LOGO_PATH), width=72)
-st.sidebar.title("Assistant HDJ")
-if st.sidebar.button("← Retour à l'accueil", use_container_width=True):
-    st.session_state["entered"] = False
-    st.rerun()
-if st.sidebar.button("↻ Relancer l'analyse guidée", use_container_width=True):
-    st.session_state["wizard_done"] = False
-    st.session_state["wizard_step"] = 0
-    st.rerun()
-use_case = st.sidebar.radio(
-    "Choisissez votre cas d'usage",
-    [
-        "Arbitrer une création HDJ",
-        "Réduire les délais",
-        "Prioriser une spécialité",
-        "Préparer une présentation",
-    ],
-    help="Le tableau de bord adapte le parcours recommandé selon votre objectif.",
-)
-
-st.sidebar.markdown("### Questions rapides")
-main_issue = st.sidebar.selectbox(
-    "Quel problème voulez-vous traiter en premier ?",
-    [
-        "Délais patients trop longs",
-        "Saturation des ressources",
-        "Parcours trop fragmentés",
-        "Impact financier à démontrer",
-    ],
-)
-decision_style = st.sidebar.radio(
-    "Quel niveau d'ambition ?",
-    ["Prudent", "Équilibré", "Ambitieux"],
-    index=1,
-    help="Prudent privilégie la capacité existante. Ambitieux favorise la transformation.",
-)
-focus_specialty = st.sidebar.selectbox(
-    "Spécialité à regarder",
-    ["Automatique", "oncologie", "cardiologie", "diabetologie", "nephrologie", "douleur_chronique"],
-)
-
-with st.sidebar.expander("Réglages avancés", expanded=False):
-    st.caption("Issus de votre analyse guidée. Ajustez pour tester d'autres hypothèses.")
-    st.markdown("**File active & parcours**")
-    cfg_patients = st.number_input("Patients (file active)", 50, 2000, step=10, key="cfg_patients")
-    cfg_fragmentation_pct = st.number_input("Parcours fragmentés (%)", 1, 100, step=1, key="cfg_fragmentation_pct")
-    cfg_hdj_eligible_pct = st.number_input("Convertibles en HDJ (%)", 1, 100, step=1, key="cfg_hdj_eligible_pct")
-    cfg_avg_wait = st.number_input("Délai moyen (jours)", 1, 120, step=1, key="cfg_avg_wait")
-    cfg_avg_acts = st.number_input("Actes moyens / patient", 2, 10, step=1, key="cfg_avg_acts")
-    st.markdown("**Capacité HDJ**")
-    cfg_hdj_units = st.number_input("Unités HDJ", 1, 6, step=1, key="cfg_hdj_units")
-    cfg_hdj_beds = st.number_input("Places / lits (total)", 1, 100, step=1, key="cfg_hdj_beds")
-    cfg_hdj_slots = st.number_input("Créneaux / jour (total)", 1, 200, step=1, key="cfg_hdj_slots")
-    cfg_hdj_exams = st.number_input("Examens / jour", 1, 100, step=1, key="cfg_hdj_exams")
-    cfg_setup_cost = st.number_input("Coût ouverture / créneau (€)", 0, 10000, step=100, key="cfg_setup_cost")
-    grouping_rate = st.slider(
-        "Seuil de regroupement HDJ", 0.1, 0.9, step=0.05, key="cfg_grouping_rate",
-        help="Plus le seuil est bas, plus le système regroupe facilement les patients en HDJ.",
-    )
-    slot_duration = st.selectbox("Durée créneau (minutes)", [20, 30, 45, 60], key="cfg_slot_duration")
-    fragmented_tariff = st.number_input(
-        "Tarif parcours fragmenté (€)", min_value=0, max_value=2000, step=10, key="cfg_frag_tariff",
-    )
-    hdj_tariff = st.number_input(
-        "Tarif parcours HDJ (€)", min_value=0, max_value=2000, step=10, key="cfg_hdj_tariff",
-    )
-    sim_days = st.selectbox("Horizon simulation (jours)", [14, 30, 60], key="cfg_sim_days")
-
-config = build_simulation_config(use_cfg_prefix=True)
-
-with st.spinner("Simulation en cours…"):
-    analysis = load_analysis(config)
-store_last_analysis(analysis)
-
-results = analysis["results"]
-comparison = analysis["comparison"]
-deltas = analysis["deltas"]
-conversion = analysis["conversion_opportunity"]
-recommendation = analysis["recommendation"]
-
-best_key = recommendation["recommended_scenario"]
-best = results[best_key].summary
-baseline = results["status_quo"].summary
-
-
-def default_step(case: str) -> str:
-    if case == "Réduire les délais":
-        return "Comparer les scénarios"
-    if case == "Prioriser une spécialité":
-        return "Prioriser la spécialité"
-    if case == "Préparer une présentation":
-        return "Synthèse comité"
-    return "Décision guidée"
-
-
-def flow_steps(case: str) -> list[str]:
-    if case == "Réduire les délais":
-        return [
-            "1. Vérifier quel scénario réduit le plus l'attente.",
-            "2. Contrôler que les ressources ne dépassent pas 85 % de saturation.",
-            "3. Ajuster le volume ou la capacité si le scénario devient irréaliste.",
-        ]
-    if case == "Prioriser une spécialité":
-        return [
-            "1. Identifier la spécialité avec le plus de patients convertibles.",
-            "2. Vérifier que ce volume justifie un HDJ dédié.",
-            "3. Utiliser la comparaison pour défendre l'impact attendu.",
-        ]
-    if case == "Préparer une présentation":
-        return [
-            "1. Lire la décision proposée.",
-            "2. Garder les 4 chiffres clés pour la slide de synthèse.",
-            "3. Montrer les écarts vs statu quo et la spécialité prioritaire.",
-        ]
-    return [
-        "1. Répondre aux questions dans la barre latérale.",
-        "2. Lire la décision proposée ci-dessous.",
-        "3. Vérifier capacité et spécialité avant de conclure.",
-    ]
-
-
-steps = [
-    "Flux des agents",
-    "Décision guidée",
-    "Comparer les scénarios",
-    "Vérifier la capacité",
-    "Prioriser la spécialité",
-    "Synthèse comité",
-]
-if st.session_state.get("seen_flux"):
-    default_index = steps.index(default_step(use_case))
-else:
-    default_index = 0
-    st.session_state["seen_flux"] = True
-st.sidebar.markdown("### Parcours recommandé")
-page = st.sidebar.radio("Étape à afficher", steps, index=default_index)
-
-st.sidebar.markdown("### Ce que l'assistant va faire")
-for step in flow_steps(use_case):
-    st.sidebar.caption(step)
-
-wait_improved = best["avg_wait_days"] < baseline["avg_wait_days"]
-revenue_improved = best["total_revenue_eur"] > baseline["total_revenue_eur"]
-capacity_ok = best["max_resource_saturation"] < 0.85
-conversion_ok = best["hdj_conversion_rate"] > baseline["hdj_conversion_rate"]
-top_spec = conversion.iloc[0]["specialty"] if len(conversion) else "N/A"
-top_row = conversion.iloc[0] if len(conversion) else None
-
-if focus_specialty != "Automatique":
-    focused_conversion = conversion[conversion["specialty"] == focus_specialty]
-else:
-    focused_conversion = conversion.head(1)
-
-render_workspace_header()
-
-rail_col, main_col, right_col = st.columns([0.15, 0.60, 0.35], gap="large")
-
-with rail_col:
-    st.markdown(rail(page), unsafe_allow_html=True)
-
-if page == "Flux des agents":
-    summary = results[best_key].summary
-    frag, ex, new = flow_counts(summary)
-    total = max(frag + ex + new, 1)
-    hdj_total = ex + new
-
-    with main_col:
-        st.markdown(
-            f"""
-            <div style="margin-bottom:12px;">
-              <div class="greeting-title">Les agents en action</div>
-              <div class="greeting-sub">Scénario : {SCENARIO_LABELS.get(best_key, best_key)} — chaque point est un patient orienté par l'agent de triage.</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-        st.markdown(
-            f'<span class="lane-chip"><span class="lane-dot" style="background:{LANE_COLOR["frag"]}"></span>Parcours fragmenté</span>'
-            f'<span class="lane-chip"><span class="lane-dot" style="background:{LANE_COLOR["ex"]}"></span>HDJ existant</span>'
-            f'<span class="lane-chip"><span class="lane-dot" style="background:{LANE_COLOR["new"]}"></span>Nouveau HDJ</span>',
-            unsafe_allow_html=True,
-        )
-
-        anim = st.empty()
-        dots = build_flow_dots((frag, ex, new))
-        replay = st.button("🔄 Rejouer l'animation")
-        frames = 30
-        for f in range(frames + 1):
-            anim.plotly_chart(flow_figure(dots, f / frames), use_container_width=True)
-            time.sleep(0.045)
-        _ = replay
-
-        with st.container(border=True):
-            st.markdown('<div class="card-eyebrow">Répartition finale des parcours</div>', unsafe_allow_html=True)
-            st.plotly_chart(sankey_chart(summary), use_container_width=True)
-
-    with right_col:
-        st.markdown(
-            f"""
-            <div class="insight-card">
-              <h3>Patients orientés</h3>
-              <div class="flow-count" style="color:{LANE_COLOR['frag']} !important">{frag} <span class="muted">fragmentés</span></div>
-              <div class="flow-count" style="color:{LANE_COLOR['ex']} !important">{ex} <span class="muted">HDJ existant</span></div>
-              <div class="flow-count" style="color:{LANE_COLOR['new']} !important">{new} <span class="muted">nouveau HDJ</span></div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-        st.markdown(
-            f"""
-            <div class="insight-card">
-              <h3>Lecture</h3>
-              <p class="muted"><b>{hdj_total / total * 100:.0f} %</b> des patients sont orientés vers un parcours HDJ
-              dans le scénario recommandé, contre une prise en charge fragmentée au statu quo.</p>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-        next_step_box("ouvrez 'Décision guidée' pour la recommandation chiffrée.")
-
-elif page == "Décision guidée":
-    with main_col:
-        st.markdown(
-            f"""
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
-              <div>
-                <div class="greeting-title">Bonjour, voici votre recommandation</div>
-                <div class="greeting-sub">Cas d'usage : {use_case} — Problème : {main_issue}</div>
-              </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-        row1_left, row1_right = st.columns([0.62, 0.38], gap="medium")
-        with row1_left:
-            with st.container(border=True):
-                st.markdown('<div class="card-eyebrow">Attente par scénario</div>', unsafe_allow_html=True)
-                fig_wait = px.bar(
-                    comparison,
-                    x="scenario_label",
-                    y="avg_wait_days",
-                    color="scenario_label",
-                    color_discrete_sequence=CHART_SEQUENCE,
-                    labels={"scenario_label": "", "avg_wait_days": "Jours"},
-                )
-                fig_wait.update_layout(showlegend=False, height=260)
-                st.plotly_chart(style_chart(fig_wait), use_container_width=True)
-        with row1_right:
-            impact = best["total_revenue_eur"] - baseline["total_revenue_eur"]
-            st.markdown(
-                f"""
-                <div class="promo-card">
-                  <div class="small">DÉCISION RECOMMANDÉE</div>
-                  <div class="big">{recommendation['recommended_label']}</div>
-                  <div class="tag">Impact estimé : {format_eur(impact)}</div>
-                  <div class="tag">Attente : {best['avg_wait_days'] - baseline['avg_wait_days']:+.1f} j vs statu quo</div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-
-        row2_left, row2_right = st.columns(2, gap="medium")
-        with row2_left:
-            st.markdown(
-                f"""
-                <div class="dash-card">
-                  <h3>Indicateurs clés</h3>
-                  <div class="metric-grid">
-                    {metric_card("Attente", f"{best['avg_wait_days']:.1f} j", f"{best['avg_wait_days'] - baseline['avg_wait_days']:+.1f} j")}
-                    {metric_card("Conversion HDJ", f"{best['hdj_conversion_rate'] * 100:.1f} %", f"{(best['hdj_conversion_rate'] - baseline['hdj_conversion_rate']) * 100:+.1f} pts")}
-                    {metric_card("Impact", format_eur(best["total_revenue_eur"] - baseline["total_revenue_eur"]), "vs statu quo")}
-                    {metric_card("Saturation", f"{best['max_resource_saturation'] * 100:.1f} %", "seuil 85 %")}
-                  </div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-        with row2_right:
-            st.markdown(
-                f"""
-                <div class="dash-card">
-                  <h3>Checklist de décision</h3>
-                  {check_row("Les délais baissent", wait_improved)}
-                  {check_row("La valorisation augmente", revenue_improved)}
-                  {check_row("La capacité reste sous 85 %", capacity_ok)}
-                  {check_row("La fragmentation diminue", conversion_ok)}
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-
-        row3_left, row3_right = st.columns([0.62, 0.38], gap="medium")
-        with row3_left:
-            with st.container(border=True):
-                st.markdown('<div class="card-eyebrow">Conversion HDJ par scénario</div>', unsafe_allow_html=True)
-                fig_conv = px.bar(
-                    comparison,
-                    x="scenario_label",
-                    y="hdj_conversion_rate",
-                    color="scenario_label",
-                    color_discrete_sequence=CHART_SEQUENCE,
-                    labels={"scenario_label": "", "hdj_conversion_rate": "%"},
-                )
-                fig_conv.update_layout(showlegend=False, height=240)
-                st.plotly_chart(style_chart(fig_conv), use_container_width=True)
-        with row3_right:
-            with st.container(border=True):
-                st.markdown('<div class="card-eyebrow">Saturation ressources</div>', unsafe_allow_html=True)
-                st.plotly_chart(
-                    gauge_chart(best["max_resource_saturation"] * 100, ""),
-                    use_container_width=True,
-                )
-
-    with right_col:
-        wait_pct = max(0, min((1 - best["avg_wait_days"] / max(baseline["avg_wait_days"], 1)) * 100, 100))
-        conv_pct = best["hdj_conversion_rate"] * 100
-        sat_pct = best["max_resource_saturation"] * 100
-        st.markdown(
-            f"""
-            <div class="insight-card">
-              <h3>Performance du scénario</h3>
-              {progress_bar("Réduction d'attente", f"{wait_pct:.0f} %", wait_pct)}
-              {progress_bar("Conversion HDJ", f"{conv_pct:.0f} %", conv_pct)}
-              {progress_bar("Saturation ressources", f"{sat_pct:.0f} %", sat_pct)}
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-        colors = [C_PRIMARY, C_ACCENT, C_PRIMARY_MID, C_TEXT_MUTED, C_PRIMARY_LIGHT]
-        rows_html = ""
-        for i, (_, r) in enumerate(conversion.head(4).iterrows()):
-            rows_html += list_row(
-                str(r["specialty"])[:2].upper(),
-                colors[i % len(colors)],
-                str(r["specialty"]).capitalize(),
-                f"{int(r['eligible_patients'])} patients éligibles",
-                f"{r['conversion_share_pct']:.0f} %",
-            )
-        st.markdown(
-            f"""
-            <div class="insight-card">
-              <h3>Spécialités prioritaires</h3>
-              {rows_html}
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-        proposed = recommendation["proposed_hdj_specialty"] or top_spec
-        st.markdown(
-            f"""
-            <div class="cta-card">
-              <div class="crown">🏥</div>
-              <div class="cta-title">Passer aux données réelles</div>
-              <div class="muted">Priorité : {str(proposed).capitalize()}. Branchez les extracts PMSI / CCAM pour fiabiliser la décision.</div>
-              <div class="cta-btn">Connecter les données</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-elif page == "Comparer les scénarios":
-    with main_col:
-        st.markdown(
-            """
-            <div class="dash-card">
-              <h3>Comparaison des scénarios</h3>
-              <p class="muted">Objectif : voir quel scénario réduit l'attente et améliore la conversion HDJ.</p>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-        fig_wait = px.bar(
-            comparison,
-            x="scenario_label",
-            y="avg_wait_days",
-            color="scenario_label",
-            title="Attente moyenne par scénario",
-            labels={"scenario_label": "Scénario", "avg_wait_days": "Jours"},
-        )
-        fig_wait.update_layout(showlegend=False)
-        st.plotly_chart(style_chart(fig_wait), use_container_width=True)
-
-        fig_conv = px.bar(
-            comparison,
-            x="scenario_label",
-            y="hdj_conversion_rate",
-            color="scenario_label",
-            title="Conversion HDJ par scénario",
-            labels={"scenario_label": "Scénario", "hdj_conversion_rate": "%"},
-        )
-        fig_conv.update_layout(showlegend=False)
-        st.plotly_chart(style_chart(fig_conv), use_container_width=True)
-
-    with right_col:
-        st.markdown(
-            f"""
-            <div class="insight-card">
-              <h3>Lecture rapide</h3>
-              {check_row("Le scénario recommandé baisse les délais", wait_improved)}
-              {check_row("Le scénario recommandé augmente la conversion HDJ", conversion_ok)}
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-        simple_table = comparison[
-            ["scenario_label", "avg_wait_days", "hdj_conversion_rate", "max_saturation"]
-        ].rename(
-            columns={
-                "scenario_label": "Scénario",
-                "avg_wait_days": "Attente (j)",
-                "hdj_conversion_rate": "Conversion (%)",
-                "max_saturation": "Saturation (%)",
-            }
-        )
-        st.dataframe(simple_table, use_container_width=True, hide_index=True)
-        next_step_box("vérifiez maintenant la capacité pour confirmer la faisabilité.")
-
-elif page == "Vérifier la capacité":
-    scenario_cap = st.selectbox(
-        "Scénario à contrôler",
-        options=list(results.keys()),
-        index=list(results.keys()).index(best_key),
-        format_func=lambda x: SCENARIO_LABELS.get(x, x),
-    )
-    res_df = results[scenario_cap].resources
-    hdj_df = results[scenario_cap].hdj_units
-    max_sat = float(res_df["saturation"].max()) if len(res_df) else 0.0
-
-    with main_col:
-        st.markdown(
-            f"""
-            <div class="dash-card">
-              <h3>Capacité et saturation</h3>
-              <p class="muted">Scénario contrôlé : {SCENARIO_LABELS.get(scenario_cap, scenario_cap)}.</p>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-        fig_sat = px.bar(
-            res_df,
-            x="label",
-            y="saturation",
-            color="label",
-            title="Saturation des ressources",
-            labels={"label": "Ressource", "saturation": "Saturation"},
-        )
-        fig_sat.add_hline(y=0.85, line_dash="dash", annotation_text="Seuil 85 %")
-        fig_sat.update_layout(showlegend=False)
-        st.plotly_chart(style_chart(fig_sat), use_container_width=True)
-        st.dataframe(hdj_df, use_container_width=True, hide_index=True)
-
-    with right_col:
-        status = "Capacité acceptable" if max_sat < 0.85 else "Risque capacitaire"
-        width = min(max_sat * 100, 100)
-        st.markdown(
-            f"""
-            <div class="insight-card">
-              <h3>{status}</h3>
-              <div class="metric-value">{max_sat * 100:.1f} %</div>
-              <div class="progress-track"><div class="progress-fill" style="width:{width:.0f}%"></div></div>
-              <p class="muted">Seuil de vigilance : 85 %. Si le seuil est dépassé, prévoir plus de capacité ou lisser les flux.</p>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-        next_step_box("si la capacité est acceptable, priorisez maintenant la spécialité.")
-
-elif page == "Prioriser la spécialité":
-    chosen = focused_conversion.iloc[0] if len(focused_conversion) else None
-    with main_col:
-        st.markdown(
-            """
-            <div class="dash-card">
-              <h3>Priorisation clinique</h3>
-              <p class="muted">Objectif : identifier la spécialité avec le plus fort potentiel de regroupement en HDJ.</p>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-        fig_opp = px.bar(
-            conversion,
-            x="specialty",
-            y="conversion_share_pct",
-            color="avg_wait",
-            color_continuous_scale="Purples",
-            title="Potentiel de conversion HDJ par spécialité",
-            labels={
-                "specialty": "Spécialité",
-                "conversion_share_pct": "Patients éligibles (%)",
-                "avg_wait": "Attente moyenne (j)",
-            },
-        )
-        st.plotly_chart(style_chart(fig_opp), use_container_width=True)
-        st.dataframe(conversion, use_container_width=True, hide_index=True)
-
-    with right_col:
-        if chosen is not None:
-            st.markdown(
-                f"""
-                <div class="insight-card">
-                  <h3>Priorité proposée</h3>
-                  <div class="metric-value">{chosen['specialty']}</div>
-                  <p class="muted">{int(chosen['eligible_patients'])} patients éligibles, soit {chosen['conversion_share_pct']:.1f} % de la file.</p>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-        else:
-            st.warning("Aucune donnée disponible pour la spécialité sélectionnée.")
-        next_step_box("ouvrez la synthèse comité pour obtenir le message de restitution.")
-
-elif page == "Synthèse comité":
-    with main_col:
-        st.markdown(
-            f"""
-            <div class="dash-card">
-              <div class="decision-pill">Synthèse prête à présenter</div>
-              <h3>Conclusion</h3>
-              <div class="metric-value">{recommendation['recommended_label']}</div>
-              <p class="muted">Basée sur les données que vous avez saisies dans l'analyse guidée.</p>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-        st.markdown(
-            f"""
-            <div class="dash-card">
-              <h3>Message à porter</h3>
-              <div class="check-row check-ok">Gain d'attente estimé : {best['avg_wait_days'] - baseline['avg_wait_days']:+.1f} jours vs statu quo</div>
-              <div class="check-row check-ok">Impact estimé : {format_eur(best['total_revenue_eur'] - baseline['total_revenue_eur'])}</div>
-              <div class="check-row {'check-ok' if capacity_ok else 'check-warn'}">Saturation maximale : {best['max_resource_saturation'] * 100:.1f} %</div>
-              <div class="check-row check-ok">Périmètre prioritaire : {recommendation['proposed_hdj_specialty'] or top_spec}</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-    with right_col:
-        st.markdown(
-            f"""
-            <div class="insight-card">
-              <h3>Vos hypothèses</h3>
-              <p class="muted">Patients : {config.total_patients}</p>
-              <p class="muted">Fragmentation : {config.fragmentation_pct:.0f} %</p>
-              <p class="muted">Convertibles HDJ : {config.hdj_eligible_pct:.0f} %</p>
-              <p class="muted">Capacité : {config.hdj_daily_slots} créneaux/j · {config.hdj_total_beds} lits</p>
-              <p class="muted">Spécialité : {format_specialty(config.focus_specialty or '')}</p>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-        if capacity_ok:
-            st.success("La simulation soutient la recommandation.")
-        else:
-            st.warning("La capacité est le point de vigilance avant passage à l'échelle.")
+render_wizard()
