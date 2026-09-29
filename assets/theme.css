@@ -1,5 +1,7 @@
 /* HDJ Agent — Minimal Hospital Theme */
 
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap');
+
 :root {
     --color-primary: #1976D2;
     --color-secondary: #ECEFF1;
@@ -10,8 +12,32 @@
     --color-primary-dark: #1565C0;
     --color-primary-light: #BBDEFB;
     --color-text-muted: #616161;
+    --color-warning: #F9A825;
+    --color-danger: #E53935;
     --shadow-card: 0 12px 32px rgba(25, 118, 210, 0.08);
+    --shadow-card-hover: 0 16px 40px rgba(25, 118, 210, 0.14);
     --shadow-hero: 0 24px 56px rgba(25, 118, 210, 0.18);
+    --font-sans: 'Manrope', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+* {
+    font-family: var(--font-sans);
+}
+
+/* Metric values must never clip mid-word — wrap instead of ellipsing */
+div[data-testid="stMetricValue"] {
+    white-space: normal !important;
+    word-break: break-word;
+    line-height: 1.2 !important;
+}
+
+/* Gentle lift on interactive-feeling cards — keeps the product feel consistent */
+.dash-card, .insight-card, div[data-testid="stMetric"] {
+    transition: box-shadow 0.18s ease, transform 0.18s ease;
+}
+.dash-card:hover, .insight-card:hover, div[data-testid="stMetric"]:hover {
+    box-shadow: var(--shadow-card-hover);
+    transform: translateY(-1px);
 }
 
 .splash-screen {
@@ -125,6 +151,7 @@
 }
 
 .block-container:has(.landing-page-marker) .landing-hero,
+.block-container:has(.landing-page-marker) .hiw-row,
 .block-container:has(.landing-page-marker) [data-testid="stHorizontalBlock"],
 .block-container:has(.landing-page-marker) [data-testid="stCaptionContainer"] {
     animation: landingFadeIn 0.52s cubic-bezier(0.22, 1, 0.36, 1) 0.04s both;
@@ -391,4 +418,291 @@
 .block-container:has(.specialty-picker) [data-testid="stButton"] > button:active {
     border-color: var(--color-primary) !important;
     transform: translateY(0);
+}
+
+/* ---------------------------------------------------------------- */
+/* Wizard stepper — replaces the plain "Étape X / N" progress text   */
+/* ---------------------------------------------------------------- */
+
+.stepper {
+    position: relative;
+    margin: 4px 0 26px 0;
+}
+
+.stepper-track {
+    position: absolute;
+    top: 15px;
+    left: 15px;
+    right: 15px;
+    height: 3px;
+    background: var(--color-secondary);
+    border-radius: 999px;
+    z-index: 0;
+}
+
+.stepper-track-fill {
+    position: absolute;
+    top: 0;
+    left: 0;
+    height: 100%;
+    background: linear-gradient(90deg, var(--color-primary), var(--color-accent));
+    border-radius: 999px;
+    transition: width 0.3s ease;
+}
+
+.stepper-items {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    justify-content: space-between;
+}
+
+.stepper-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    flex: 1;
+    min-width: 0;
+}
+
+.stepper-dot {
+    width: 30px;
+    height: 30px;
+    flex: none;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.78rem;
+    font-weight: 800;
+    background: var(--color-white);
+    border: 2px solid var(--color-secondary);
+    color: var(--color-text-muted) !important;
+}
+
+.stepper-item.done .stepper-dot {
+    background: var(--color-accent);
+    border-color: var(--color-accent);
+    color: var(--color-white) !important;
+}
+
+.stepper-item.active .stepper-dot {
+    background: var(--color-primary);
+    border-color: var(--color-primary);
+    color: var(--color-white) !important;
+    box-shadow: 0 0 0 5px rgba(25, 118, 210, 0.15);
+}
+
+.stepper-label {
+    font-size: 0.68rem;
+    font-weight: 700;
+    text-align: center;
+    color: var(--color-text-muted) !important;
+    line-height: 1.2;
+    white-space: nowrap;
+}
+
+.stepper-item.active .stepper-label {
+    color: var(--color-primary) !important;
+}
+
+.stepper-item.done .stepper-label {
+    color: var(--color-text) !important;
+}
+
+@media (max-width: 720px) {
+    .stepper-label { display: none; }
+    .stepper-dot { width: 24px; height: 24px; font-size: 0.68rem; }
+    .stepper-track { top: 12px; }
+}
+
+/* ---------------------------------------------------------------- */
+/* Decision hero — the final recommendation slide                    */
+/* ---------------------------------------------------------------- */
+
+.decision-hero {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    background: linear-gradient(140deg, var(--color-primary) 0%, var(--color-primary-dark) 100%);
+    border-radius: 24px;
+    padding: 28px 30px;
+    color: var(--color-white) !important;
+    box-shadow: var(--shadow-hero);
+    margin-bottom: 18px;
+}
+
+.decision-hero-icon {
+    font-size: 2.6rem;
+    line-height: 1;
+    flex: none;
+    background: rgba(255, 255, 255, 0.16);
+    width: 64px;
+    height: 64px;
+    border-radius: 18px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.decision-hero-eyebrow {
+    font-size: 0.76rem;
+    font-weight: 800;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    opacity: 0.85;
+    color: var(--color-white) !important;
+}
+
+.decision-hero-title {
+    font-size: 1.6rem;
+    font-weight: 850;
+    margin: 4px 0 2px 0;
+    color: var(--color-white) !important;
+}
+
+.decision-hero-sub {
+    font-size: 0.92rem;
+    opacity: 0.92;
+    color: var(--color-white) !important;
+}
+
+.decision-compare {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 14px;
+    margin-bottom: 18px;
+}
+
+.decision-compare-item {
+    background: var(--color-white);
+    border: 1px solid var(--color-secondary);
+    border-radius: 18px;
+    padding: 16px 18px;
+    box-shadow: var(--shadow-card);
+}
+
+.decision-compare-label {
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--color-text-muted) !important;
+    margin-bottom: 6px;
+}
+
+.decision-compare-values {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    font-weight: 800;
+}
+
+.decision-compare-values .was {
+    font-size: 1.0rem;
+    color: var(--color-text-muted) !important;
+    text-decoration: line-through;
+    text-decoration-color: var(--color-secondary);
+}
+
+.decision-compare-values .arrow {
+    color: var(--color-text-muted) !important;
+    font-size: 0.9rem;
+}
+
+.decision-compare-values .now {
+    font-size: 1.35rem;
+    color: var(--color-text) !important;
+}
+
+.decision-compare-delta {
+    font-size: 0.82rem;
+    font-weight: 800;
+    margin-top: 4px;
+}
+
+.decision-compare-delta.good { color: var(--color-accent) !important; }
+.decision-compare-delta.bad { color: var(--color-danger) !important; }
+.decision-compare-delta.neutral { color: var(--color-text-muted) !important; }
+
+.reason-list {
+    background: var(--color-white);
+    border: 1px solid var(--color-secondary);
+    border-radius: 20px;
+    padding: 8px 20px;
+    box-shadow: var(--shadow-card);
+    margin-bottom: 16px;
+}
+
+.reason-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 12px 0;
+    border-bottom: 1px solid var(--color-secondary);
+    color: var(--color-text) !important;
+    font-size: 0.94rem;
+    line-height: 1.5;
+}
+
+.reason-item:last-child { border-bottom: none; }
+
+.reason-check {
+    flex: none;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: var(--color-accent);
+    color: var(--color-white) !important;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.72rem;
+    font-weight: 900;
+    margin-top: 2px;
+}
+
+/* ---------------------------------------------------------------- */
+/* Landing "how it works" strip                                      */
+/* ---------------------------------------------------------------- */
+
+.hiw-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 16px;
+    margin: 4px 0 22px 0;
+}
+
+.hiw-card {
+    background: var(--color-white);
+    border: 1px solid var(--color-secondary);
+    border-radius: 20px;
+    padding: 20px 20px 18px;
+    box-shadow: var(--shadow-card);
+    position: relative;
+}
+
+.hiw-step {
+    font-size: 0.72rem;
+    font-weight: 800;
+    color: var(--color-primary) !important;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    margin-bottom: 8px;
+}
+
+.hiw-icon { font-size: 1.6rem; margin-bottom: 8px; }
+
+.hiw-title {
+    font-weight: 800;
+    color: var(--color-text) !important;
+    font-size: 1.0rem;
+    margin-bottom: 4px;
+}
+
+.hiw-text {
+    font-size: 0.86rem;
+    color: var(--color-text-muted) !important;
+    line-height: 1.45;
 }

@@ -410,10 +410,14 @@ L'écran final affiche :
 \end{itemize}
 
 % ---------------------------------------------------------------------------
-\section{Exemple de profil « Création nouveau HDJ »}
+\section{Scénarios de démonstration}
 % ---------------------------------------------------------------------------
 
-Pour tester une recommandation orientée \textbf{Création nouveau HDJ}, saisissez par exemple :
+Les trois profils ci-dessous ont été rejoués avec le moteur réel (\texttt{src/metrics.py}), pas estimés à la main. Saisis tels quels à l'étape 2, ils reproduisent de façon fiable la recommandation indiquée : utiles pour répéter une démonstration ou pour l'exécuter en direct devant un jury.
+
+\subsection{Profil A : Oncologie, forte fragmentation}
+
+\textbf{Recommandation obtenue : Création nouveau HDJ.} C'est le profil de référence de ce guide : le plus sûr pour une démonstration en direct, avec un contraste net entre scénarios et une jauge de saturation qui passe au rouge à l'étape 6.
 
 \begin{itemize}
   \item \textbf{Spécialité} : Oncologie ;
@@ -432,7 +436,149 @@ Pour tester une recommandation orientée \textbf{Création nouveau HDJ}, saisiss
   \item \textbf{Horizon d'analyse} : 30 jours.
 \end{itemize}
 
-Ce profil combine forte fragmentation, file importante, capacité HDJ serrée et écart tarifaire favorable au regroupement. Les gains nets typiques placent la création au-dessus de l'optimisation.
+\begin{center}
+\begin{tabular}{lrrrrr}
+\toprule
+\textbf{Scénario} & \textbf{Attente} & \textbf{Conv.} & \textbf{Saturation} & \textbf{Revenus} & \textbf{Gain net} \\
+\midrule
+Statu quo & 75,7\,j & 0\,\% & 0\,\% & 26\,976\,€ & 0\,€ \\
+Optimisation existants & 44,9\,j & 70\,\% & 117\,\%\textsuperscript{*} & 65\,616\,€ & 38\,640\,€ \\
+\textbf{Création nouveau HDJ} & \textbf{33,7\,j} & \textbf{70\,\%} & \textbf{87\,\%} & \textbf{74\,016\,€} & \textbf{43\,440\,€} \\
+\bottomrule
+\end{tabular}
+\end{center}
+\textit{\textsuperscript{*} au-delà du seuil d'alerte de 85\,\%.}
+
+Texte affiché à l'étape 8 :
+\begin{itemize}
+  \item Gain net estimé : 43\,440 € vs statu quo (dont $-$3\,600 € d'investissement structurel) ;
+  \item Création d'un nouveau HDJ : +4\,800 € de gain net vs optimiser l'existant (38\,640 €) ;
+  \item Les HDJ existants sont saturés (117\,\%) contre 87\,\% avec une unité dédiée ;
+  \item La spécialité « oncologie » présente un volume fragmenté suffisant pour justifier un nouveau HDJ dédié.
+\end{itemize}
+
+\textit{Astuce présentateur : à l'étape 6, la jauge de saturation du scénario « optimisation seule » dépasse 100\,\% et passe au rouge : c'est le moment le plus parlant pour justifier la création d'une unité dédiée. Créneaux proposés pour le nouveau HDJ : 12 par jour.}
+
+\subsection{Profil B : Même demande, capacité existante large}
+
+\textbf{Recommandation obtenue : Optimisation HDJ existants.} Identique au profil A, mais l'établissement dispose déjà de capacité et l'ouverture d'un créneau coûte cher : investir dans un nouvel HDJ n'est plus le meilleur calcul. Répond à « pourquoi ne pas toujours créer un nouvel HDJ ? ».
+
+\begin{itemize}
+  \item \textbf{Spécialité} : Oncologie ;
+  \item \textbf{Patients (file active)} : 150 ;
+  \item \textbf{Parcours fragmentés} : 75\,\% ;
+  \item \textbf{Convertibles en HDJ} : 70\,\% ;
+  \item \textbf{Délai moyen} : 50 jours ;
+  \item \textbf{Actes par patient} : 4 ;
+  \item \textbf{Tarif fragmenté} : 80 € ;
+  \item \textbf{Tarif HDJ} : 400 € ;
+  \item \textbf{Coût d'ouverture par créneau} : 2\,000 € ;
+  \item \textbf{Unités HDJ} : 1 ;
+  \item \textbf{Lits} : 10 ;
+  \item \textbf{Créneaux par jour} : 15 ;
+  \item \textbf{Examens par jour} : 10 ;
+  \item \textbf{Horizon d'analyse} : 30 jours.
+\end{itemize}
+
+\begin{center}
+\begin{tabular}{lrrrrr}
+\toprule
+\textbf{Scénario} & \textbf{Attente} & \textbf{Conv.} & \textbf{Saturation} & \textbf{Revenus} & \textbf{Gain net} \\
+\midrule
+Statu quo & 75,7\,j & 0\,\% & 0\,\% & 26\,976\,€ & 0\,€ \\
+\textbf{Optimisation existants} & \textbf{40,0\,j} & \textbf{70\,\%} & \textbf{23\,\%} & \textbf{65\,616\,€} & \textbf{38\,640\,€} \\
+Création nouveau HDJ & 33,7\,j & 70\,\% & 17\,\% & 74\,016\,€ & 23\,040\,€ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Texte affiché à l'étape 8 :
+\begin{itemize}
+  \item Gain net estimé : 38\,640 € vs statu quo (revenus supplémentaires, sans ouvrir de nouvelle unité) ;
+  \item L'optimisation des HDJ existants offre le meilleur rapport bénéfice / investissement dans votre configuration ;
+  \item Créer un nouveau HDJ coûterait 15\,600 € de gain net de plus que l'optimisation --- investissement non rentable.
+\end{itemize}
+
+\textit{Astuce présentateur : le nouveau HDJ reste plus rapide (33,7\,j contre 40\,j) mais moins rentable une fois les 24\,000 € d'investissement déduits : bon exemple pour montrer que l'outil arbitre, il ne pousse pas systématiquement à construire.}
+
+\subsection{Profil C : Cardiologie, faible fragmentation}
+
+\textbf{Recommandation obtenue : Statu quo.} Peu de fragmentation, tarif HDJ saisi volontairement sous le tarif fragmenté : aucune reconfiguration n'est rentable. À garder en réserve pour montrer que l'outil sait aussi recommander de ne rien changer.
+
+\begin{itemize}
+  \item \textbf{Spécialité} : Cardiologie ;
+  \item \textbf{Patients (file active)} : 150 ;
+  \item \textbf{Parcours fragmentés} : 15\,\% ;
+  \item \textbf{Convertibles en HDJ} : 10\,\% ;
+  \item \textbf{Délai moyen} : 10 jours ;
+  \item \textbf{Actes par patient} : 2 ;
+  \item \textbf{Tarif fragmenté} : 300 € ;
+  \item \textbf{Tarif HDJ} : 200 € ;
+  \item \textbf{Coût d'ouverture par créneau} : 500 € ;
+  \item \textbf{Unités HDJ} : 1 ;
+  \item \textbf{Lits} : 2 ;
+  \item \textbf{Créneaux par jour} : 3 ;
+  \item \textbf{Examens par jour} : 2 ;
+  \item \textbf{Horizon d'analyse} : 30 jours.
+\end{itemize}
+
+\begin{center}
+\begin{tabular}{lrrrrr}
+\toprule
+\textbf{Scénario} & \textbf{Attente} & \textbf{Conv.} & \textbf{Saturation} & \textbf{Revenus} & \textbf{Gain net} \\
+\midrule
+\textbf{Statu quo} & \textbf{19,9\,j} & \textbf{0\,\%} & \textbf{0\,\%} & \textbf{30\,960\,€} & \textbf{0\,€} \\
+Optimisation existants & 17,8\,j & 10\,\% & 17\,\% & 29\,160\,€ & $-$1\,800\,€ \\
+Création nouveau HDJ & 17,4\,j & 10\,\% & 12\,\% & 29\,460\,€ & $-$7\,500\,€ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Texte affiché à l'étape 8 :
+\begin{itemize}
+  \item Aucune reconfiguration n'améliore le gain net : les coûts ou la saturation l'emportent sur les bénéfices attendus ;
+  \item Le statu quo évite un investissement structurel (gain net des autres scénarios $\leq$ 0 €).
+\end{itemize}
+
+\textit{Astuce présentateur : le tarif HDJ saisi sous le tarif fragmenté rend la conversion non rentable : un rappel utile que les résultats dépendent entièrement des hypothèses tarifaires saisies, pas d'un biais du modèle.}
+
+% ---------------------------------------------------------------------------
+\section{Script de présentation}
+% ---------------------------------------------------------------------------
+
+Un déroulé possible pour une démonstration de 5 à 7 minutes, construit autour du Profil A.
+
+\begin{itemize}
+  \item \textbf{0:00, Contexte.} CHU de Guyane, déficit de 75 M€, activité ambulatoire fragmentée : un patient diabétique complexe qui fait 5 allers-retours au lieu d'une journée groupée.
+  \item \textbf{0:45, Lancer l'app.} Splash CHU ($\sim$2 s) $\rightarrow$ page d'accueil $\rightarrow$ « Commencer l'analyse ».
+  \item \textbf{1:00, Étapes 1-2.} Choisir Oncologie, saisir le Profil A (valeurs ci-dessus). Commenter en saisissant : file active, fragmentation, tarifs.
+  \item \textbf{2:30, Étapes 3-5.} Dérouler rapidement : taux de fragmentation, les 5 agents, puis le diagramme Sankey du triage (45 fragmentés / 105 nouveau HDJ).
+  \item \textbf{4:00, Étape 6, le point fort.} Jauge de saturation : 117\,\% en rouge si l'on se contente d'optimiser l'existant, 87\,\% avec une unité dédiée. Laisser ce contraste parler.
+  \item \textbf{5:00, Étapes 7-8.} Graphique de gain net, puis la recommandation : Création nouveau HDJ, +43\,440 € de gain net, 12 créneaux/jour proposés.
+  \item \textbf{6:30, Clôture.} Retour à l'accueil, lancer la narration 60 s si le temps le permet, ou enchaîner directement sur les questions.
+\end{itemize}
+
+\textit{Garder en réserve : le Profil B répond à « et si on optimisait plutôt que de construire ? », le Profil C répond à « l'outil recommande-t-il toujours de dépenser ? ». Ne les montrer que si la question vient.}
+
+% ---------------------------------------------------------------------------
+\section{Questions attendues}
+% ---------------------------------------------------------------------------
+
+Anticipées à partir de l'écart entre le sujet du Défi 5 et le MVP livré.
+
+\begin{itemize}
+  \item \textbf{Le sujet mentionnait Mesa, SimPy, OR-Tools, LangGraph : pourquoi ce n'est pas dans le MVP ?} \\
+  Ces briques étaient proposées « si autorisé », non imposées. Le MVP livre la même logique fonctionnelle (agents patients / ressources / triage / coordinateur / évaluateur, 3 scénarios comparés) avec des dataclasses Python et des règles déterministes, plus simples à auditer et à démontrer dans le temps imparti. L'intégration Mesa/SimPy/OR-Tools est la suite logique pour passer à l'échelle.
+
+  \item \textbf{D'où viennent les chiffres si aucune donnée aléatoire n'est injectée ?} \\
+  Chaque simulation part exclusivement des saisies (file active, taux, tarifs, capacité), avec une répartition déterministe et aucun tirage. Pour l'oncologie et la diabétologie, les extracts CHU réels (\texttt{documents/data}) préremplissent des valeurs par défaut plausibles (âge moyen, fréquence de visites), ajustables ensuite.
+
+  \item \textbf{Les extracts CHU montrent-ils déjà de l'activité HDJ ?} \\
+  Non : sur environ 6\,186 lignes de consultations externes, seules 4 lignes sont des séjours HDJ. C'est la confirmation empirique du problème : l'activité ambulatoire est aujourd'hui presque entièrement fragmentée.
+
+  \item \textbf{Comment ça passe à l'échelle au-delà d'une spécialité ?} \\
+  Court terme : diabéto/endocrino. Moyen terme : néphro, cardio, pneumo, onco. Long terme : plateforme d'orchestration multi-agents à l'échelle du CHU, connectée au PMSI/CCAM/SIH en direct plutôt qu'à une saisie manuelle.
+\end{itemize}
 
 % ---------------------------------------------------------------------------
 \section{Navigation et raccourcis}
@@ -522,3 +668,4 @@ pdflatex guide_mediflow_hdj.tex
 - **Nom du projet :** MediFlow HDJ
 - **Page de garde simple** : texte centré, sans bandeaux ni encadrés (date : 7 juin 2026)
 - **Listes à puces colorées** partout (tableaux et tirets « — » supprimés du corps du document)
+- **Ajout (démo)** : la section « Exemple de profil » est remplacée par **Scénarios de démonstration** (profils A/B/C, chiffres vérifiés avec le moteur réel `src/metrics.py`), suivie d'un **Script de présentation** minuté et d'une section **Questions attendues** pour la soutenance.

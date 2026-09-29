@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import base64
-import math
-import random
 import time
 from pathlib import Path
 
@@ -72,6 +70,26 @@ C_PRIMARY_LIGHT = "#BBDEFB"
 C_PRIMARY_MID = "#64B5F6"
 C_TEXT_MUTED = "#616161"
 CHART_SEQUENCE = [C_SECONDARY, C_PRIMARY_MID, C_PRIMARY]
+
+# One fixed color/icon per scenario, reused across every chart so a jury reading
+# several charts in a row never has to re-learn what a color means.
+SCENARIO_ICON = {
+    "status_quo": "⏸️",
+    "optimize_existing": "🔧",
+    "new_hdj": "🏥",
+}
+SCENARIO_COLOR = {
+    "status_quo": C_TEXT_MUTED,
+    "optimize_existing": C_PRIMARY,
+    "new_hdj": C_ACCENT,
+}
+SCENARIO_LABEL_COLOR = {SCENARIO_LABELS[k]: v for k, v in SCENARIO_COLOR.items()}
+
+WIZ_STEP_ICONS = ["🏷️", "📝", "🧭", "🤖", "🔀", "📅", "💶", "🎯"]
+WIZ_STEPS_SHORT = [
+    "Spécialité", "Données", "Parcours", "Agents",
+    "Triage", "Capacité", "Impact", "Décision",
+]
 
 st.set_page_config(
     page_title="HDJ Agent MVP",
@@ -172,42 +190,6 @@ st.markdown(
     }
     .hero-badge .small { font-size: .72rem; opacity: .85; letter-spacing: .06em; }
     .hero-badge .big { font-size: 1.15rem; font-weight: 800; margin-top: 4px; }
-
-    .rail-card {
-        background: var(--color-white, #FFFFFF);
-        border: 1px solid var(--color-secondary, #ECEFF1);
-        border-radius: 26px;
-        padding: 18px 10px;
-        min-height: 640px;
-        box-shadow: var(--shadow-card, 0 12px 32px rgba(25, 118, 210, 0.08));
-        text-align: center;
-    }
-    .rail-logo {
-        width: 44px; height: 44px; line-height: 44px;
-        border-radius: 14px; margin: 0 auto 22px auto;
-        background: var(--color-secondary, #ECEFF1);
-        color: var(--color-primary, #1976D2) !important;
-        font-weight: 900; font-size: 1.15rem;
-    }
-    .rail-item, .rail-item-active {
-        width: 42px; height: 42px; line-height: 42px;
-        border-radius: 14px; margin: 12px auto; font-weight: 800;
-    }
-    .rail-item {
-        background: var(--color-bg, #FAFAFA);
-        color: var(--color-primary, #1976D2) !important;
-        border: 1px solid var(--color-secondary, #ECEFF1);
-    }
-    .rail-item-active {
-        background: var(--color-primary, #1976D2);
-        color: var(--color-white, #FFFFFF) !important;
-        box-shadow: 0 12px 24px rgba(25, 118, 210, 0.22);
-    }
-    .rail-block { margin: 16px auto 8px auto; }
-    .rail-label {
-        font-size: .72rem; color: var(--color-text-muted, #616161) !important; font-weight: 700;
-        margin-top: 4px; white-space: nowrap;
-    }
 
     .dash-card, .insight-card {
         background: var(--color-white, #FFFFFF);
@@ -502,27 +484,6 @@ def check_row(label: str, passed: bool) -> str:
     return f'<div class="check-row {klass}">{label}<br><span class="muted">{status}</span></div>'
 
 
-def rail(page_name: str) -> str:
-    items = [
-        ("Flux des agents", "🔄", "Flux"),
-        ("Décision guidée", "🎯", "Décision"),
-        ("Comparer les scénarios", "📊", "Comparer"),
-        ("Vérifier la capacité", "🏥", "Capacité"),
-        ("Prioriser la spécialité", "⭐", "Spécialité"),
-        ("Synthèse comité", "📋", "Synthèse"),
-    ]
-    rows = [logo_img(css_class="rail-logo-img")]
-    for name, icon, label in items:
-        klass = "rail-item-active" if name == page_name else "rail-item"
-        rows.append(
-            f'<div class="rail-block">'
-            f'<div class="{klass}" title="{name}">{icon}</div>'
-            f'<div class="rail-label">{label}</div>'
-            f"</div>"
-        )
-    return f'<div class="rail-card">{"".join(rows)}</div>'
-
-
 def style_chart(fig):
     fig.update_layout(
         paper_bgcolor="rgba(0,0,0,0)",
@@ -534,20 +495,24 @@ def style_chart(fig):
 
 
 def gauge_chart(value_pct: float, title: str) -> go.Figure:
+    # Resource saturation can exceed 100% (capped at 150% upstream) — extend the
+    # axis so the bar keeps reading true instead of slamming into a false ceiling.
+    axis_max = 150 if value_pct > 100 else 100
+    bar_color = "#E53935" if value_pct >= 85 else C_PRIMARY
     fig = go.Figure(
         go.Indicator(
             mode="gauge+number",
             value=value_pct,
             number={"suffix": " %", "font": {"size": 30, "color": C_TEXT}},
             gauge={
-                "axis": {"range": [0, 100], "tickcolor": C_TEXT_MUTED},
-                "bar": {"color": C_PRIMARY},
+                "axis": {"range": [0, axis_max], "tickcolor": C_TEXT_MUTED},
+                "bar": {"color": bar_color},
                 "bgcolor": C_SECONDARY,
                 "borderwidth": 0,
                 "steps": [
                     {"range": [0, 60], "color": C_BG},
                     {"range": [60, 85], "color": C_PRIMARY_LIGHT},
-                    {"range": [85, 100], "color": "#FFCDD2"},
+                    {"range": [85, axis_max], "color": "#FFCDD2"},
                 ],
                 "threshold": {
                     "line": {"color": "#E53935", "width": 3},
@@ -590,85 +555,12 @@ def list_row(letter: str, color: str, title: str, sub: str, value: str) -> str:
     )
 
 
-LANE_Y = {"frag": 3.0, "ex": 0.0, "new": -3.0}
-LANE_COLOR = {"frag": C_TEXT_MUTED, "ex": C_PRIMARY, "new": C_ACCENT}
-LANE_LABEL = {"frag": "Parcours fragmenté", "ex": "HDJ existant", "new": "Nouveau HDJ"}
-
-
 def flow_counts(summary: dict) -> tuple[int, int, int]:
     return (
         int(summary.get("fragmented_pathways", 0)),
         int(summary.get("existing_hdj_pathways", 0)),
         int(summary.get("new_hdj_pathways", 0)),
     )
-
-
-def build_flow_dots(counts: tuple[int, int, int], n: int = 44) -> list[dict]:
-    frag, ex, new = counts
-    total = max(frag + ex + new, 1)
-    seq = (
-        ["frag"] * round(n * frag / total)
-        + ["ex"] * round(n * ex / total)
-        + ["new"] * round(n * new / total)
-    )
-    if not seq:
-        seq = ["ex"]
-    rng = random.Random(7)
-    dots = []
-    for lane in seq:
-        dots.append(
-            {
-                "lane": lane,
-                "y0": rng.uniform(-0.6, 0.6),
-                "y1": LANE_Y[lane] + rng.uniform(-0.5, 0.5),
-                "delay": rng.uniform(0.0, 0.45),
-                "color": LANE_COLOR[lane],
-            }
-        )
-    return dots
-
-
-def flow_figure(dots: list[dict], t: float) -> go.Figure:
-    xs, ys, colors = [], [], []
-    for d in dots:
-        denom = max(1 - d["delay"], 1e-6)
-        p = min(max((t - d["delay"]) / denom, 0.0), 1.0)
-        x = p * 2.0
-        if x <= 1.0:
-            y = d["y0"]
-        else:
-            y = d["y0"] + (d["y1"] - d["y0"]) * (x - 1.0)
-        xs.append(x)
-        ys.append(y)
-        colors.append(d["color"])
-
-    fig = go.Figure()
-    fig.add_trace(
-        go.Scatter(
-            x=xs, y=ys, mode="markers",
-            marker=dict(size=13, color=colors, line=dict(width=1, color="#ffffff")),
-            hoverinfo="skip",
-        )
-    )
-    nodes_x = [0, 1, 2, 2, 2]
-    nodes_y = [0, 0, LANE_Y["frag"], LANE_Y["ex"], LANE_Y["new"]]
-    nodes_txt = ["Patients", "Triage", "Fragmenté", "HDJ existant", "Nouveau HDJ"]
-    fig.add_trace(
-        go.Scatter(
-            x=nodes_x, y=nodes_y, mode="markers+text",
-            marker=dict(size=26, color=C_SECONDARY, line=dict(width=2, color=C_PRIMARY)),
-            text=nodes_txt, textposition="bottom center",
-            textfont=dict(color=C_TEXT, size=12), hoverinfo="skip",
-        )
-    )
-    fig.update_layout(
-        showlegend=False, height=430,
-        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-        margin=dict(l=10, r=10, t=10, b=10),
-        xaxis=dict(range=[-0.3, 2.5], visible=False),
-        yaxis=dict(range=[-5, 5], visible=False),
-    )
-    return fig
 
 
 def sankey_chart(summary: dict) -> go.Figure:
@@ -743,9 +635,29 @@ html, body, .stApp, [data-testid="stAppViewContainer"], [data-testid="stMain"], 
     )
 
 
+def render_how_it_works() -> None:
+    steps = [
+        ("1", "📝", "Vos données", "Volume de patients, fragmentation, délais et tarifs — les vôtres, ou préremplis depuis les extracts CHU."),
+        ("2", "🤖", "Simulation multi-agents", "Des agents patients, HDJ, triage et coordination rejouent statu quo, optimisation et création d'un nouvel HDJ."),
+        ("3", "🎯", "Recommandation chiffrée", "Attente, conversion et gain net comparés scénario par scénario, avec une décision justifiée en clair."),
+    ]
+    cards = "".join(
+        f"""
+<div class="hiw-card">
+  <div class="hiw-step">Étape {n}</div>
+  <div class="hiw-icon">{icon}</div>
+  <div class="hiw-title">{title}</div>
+  <div class="hiw-text">{text}</div>
+</div>"""
+        for n, icon, title, text in steps
+    )
+    render_html(f'<div class="hiw-row">{cards}</div>')
+
+
 def render_landing_page() -> None:
     st.markdown('<div class="landing-page-marker" aria-hidden="true"></div>', unsafe_allow_html=True)
     render_landing_hero()
+    render_how_it_works()
 
     cta_left, cta_right = st.columns(2, gap="medium")
     has_analysis = st.session_state.get("last_analysis") is not None
@@ -770,23 +682,6 @@ def render_landing_page() -> None:
         run_narration(st.session_state["last_analysis"])
         st.session_state["entered"] = True
         st.rerun()
-
-
-def render_workspace_header() -> None:
-    st.markdown(
-        f"""
-<div class="workspace-header">
-  <div class="workspace-header-brand">
-    {logo_img()}
-    <div>
-      <h1 class="workspace-header-title">Assistant HDJ</h1>
-      <div class="workspace-header-sub">CHU de Guyane — simulation multi-agents</div>
-    </div>
-  </div>
-</div>
-""",
-        unsafe_allow_html=True,
-    )
 
 
 @st.cache_data(show_spinner=False)
@@ -1129,6 +1024,34 @@ def render_chu_data_panels(specialty: str | None) -> None:
                 )
 
 
+def render_stepper(step: int) -> str:
+    """Horizontal step-tracker: done (✓) / active (icon, highlighted) / upcoming (icon, dim)."""
+    last = len(WIZ_STEPS_SHORT) - 1
+    pct = (step / last * 100) if last else 0
+    items = []
+    for i, label in enumerate(WIZ_STEPS_SHORT):
+        if i < step:
+            state, content = "done", "✓"
+        elif i == step:
+            state, content = "active", WIZ_STEP_ICONS[i]
+        else:
+            state, content = "upcoming", WIZ_STEP_ICONS[i]
+        items.append(
+            f'<div class="stepper-item {state}">'
+            f'<div class="stepper-dot">{content}</div>'
+            f'<div class="stepper-label">{label}</div>'
+            f"</div>"
+        )
+    return (
+        '<div class="stepper">'
+        '<div class="stepper-track">'
+        f'<div class="stepper-track-fill" style="width:{pct:.0f}%"></div>'
+        "</div>"
+        f'<div class="stepper-items">{"".join(items)}</div>'
+        "</div>"
+    )
+
+
 def render_wizard_header(step: int, chip_html: str) -> None:
     chip_part = f" {chip_html}" if chip_html else ""
     render_html(
@@ -1142,6 +1065,7 @@ def render_wizard_header(step: int, chip_html: str) -> None:
     <div class="assistant-meta">Étape {step + 1} / {len(WIZ_STEPS)}{chip_part}</div>
   </div>
   <div class="assistant-step-title">{WIZ_STEPS[step]}</div>
+  {render_stepper(step)}
 </div>
 """
     )
@@ -1178,7 +1102,6 @@ def render_wizard() -> None:
     )
 
     render_wizard_header(step, chip_html)
-    st.progress(step / last)
 
     # Step 0: specialty first
     if step == 0:
@@ -1430,7 +1353,7 @@ def render_wizard() -> None:
         )
         m3.metric(
             f"Votre spécialité — {format_specialty(focus)}",
-            f"{focus_frag:.0f} % fragmentés",
+            f"{focus_frag:.0f} %",
             f"{focus_frag_n} / {focus_count} patients",
         )
         if cfg.data_backed:
@@ -1535,7 +1458,7 @@ Les chiffres affichés reprennent **vos saisies** (préremplies depuis le CHU si
             x="scenario_label",
             y="net_gain_eur",
             color="scenario_label",
-            color_discrete_sequence=CHART_SEQUENCE,
+            color_discrete_map=SCENARIO_LABEL_COLOR,
             labels={"scenario_label": "", "net_gain_eur": "Gain net vs statu quo (€)"},
         )
         fig.update_layout(showlegend=False, height=260)
@@ -1548,10 +1471,56 @@ Les chiffres affichés reprennent **vos saisies** (préremplies depuis le CHU si
 
     elif step == 7:
         focus = st.session_state.get("wiz_specialty", SPECIALTIES[0])
-        st.success(f"Décision conseillée : **{wrec['recommended_label']}**")
-        st.markdown(f"Spécialité étudiée : **{format_specialty(focus)}**.")
-        for reason in wrec["reasons"]:
-            st.markdown(f"- {reason}")
+        icon = SCENARIO_ICON.get(wrec["recommended_scenario"], "🎯")
+        wait_before, wait_after = wbase["avg_wait_days"], wbest["avg_wait_days"]
+        wait_delta = wait_before - wait_after
+        conv_before = wbase["hdj_conversion_rate"] * 100
+        conv_after = wbest["hdj_conversion_rate"] * 100
+        conv_delta = conv_after - conv_before
+        rec_row = wcomp[wcomp["scenario"] == wrec["recommended_scenario"]].iloc[0]
+
+        def _delta_class(v: float) -> str:
+            return "good" if v > 0 else ("bad" if v < 0 else "neutral")
+
+        reasons_html = "".join(
+            f'<div class="reason-item"><span class="reason-check">✓</span>{reason}</div>'
+            for reason in wrec["reasons"]
+        )
+
+        render_html(
+            f"""
+<div class="decision-hero">
+  <div class="decision-hero-icon">{icon}</div>
+  <div>
+    <div class="decision-hero-eyebrow">Décision conseillée</div>
+    <div class="decision-hero-title">{wrec['recommended_label']}</div>
+    <div class="decision-hero-sub">Spécialité étudiée : {format_specialty(focus)}</div>
+  </div>
+</div>
+<div class="decision-compare">
+  <div class="decision-compare-item">
+    <div class="decision-compare-label">Attente moyenne</div>
+    <div class="decision-compare-values">
+      <span class="was">{wait_before:.0f} j</span><span class="arrow">→</span><span class="now">{wait_after:.0f} j</span>
+    </div>
+    <div class="decision-compare-delta {_delta_class(wait_delta)}">{wait_delta:+.0f} j vs statu quo</div>
+  </div>
+  <div class="decision-compare-item">
+    <div class="decision-compare-label">Conversion HDJ</div>
+    <div class="decision-compare-values">
+      <span class="was">{conv_before:.0f} %</span><span class="arrow">→</span><span class="now">{conv_after:.0f} %</span>
+    </div>
+    <div class="decision-compare-delta {_delta_class(conv_delta)}">{conv_delta:+.0f} pts vs statu quo</div>
+  </div>
+  <div class="decision-compare-item">
+    <div class="decision-compare-label">Gain net vs statu quo</div>
+    <div class="decision-compare-values"><span class="now">{format_eur(rec_row['net_gain_eur'])}</span></div>
+    <div class="decision-compare-delta {_delta_class(rec_row['net_gain_eur'])}">Investissement : {format_eur(rec_row['investment_eur'])}</div>
+  </div>
+</div>
+<div class="reason-list">{reasons_html}</div>
+"""
+        )
         if wrec["recommended_scenario"] == "new_hdj" and wrec["proposed_hdj_specialty"]:
             st.info(
                 f"Création d'un HDJ dédié à **{format_specialty(wrec['proposed_hdj_specialty'])}** "
