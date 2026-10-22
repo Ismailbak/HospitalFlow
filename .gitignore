@@ -1,30 +1,13 @@
-# Python
+# Données patients (même anonymisées) : jamais versionnées
+data/raw/
+data/cache/
+
 __pycache__/
-*.py[cod]
-*.egg-info/
-.eggs/
-build/
-dist/
-
-# Virtual environments
-venv/
+*.pyc
 .venv/
-env/
-ENV/
+venv/
+.pytest_cache/
+.env
 
-# Streamlit
-.streamlit/secrets.toml
-
-# OS / editor
-.DS_Store
-Thumbs.db
-.idea/
-.vscode/
-
-# Data outputs
-data/results/
-data/last_inputs.json
+# Logs
 *.log
-
-# CHU clinical extracts (hashed but still sensitive — keep local)
-documents/data/*.xlsx
